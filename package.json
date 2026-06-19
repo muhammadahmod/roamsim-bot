@@ -1,0 +1,16 @@
+{
+  "name": "roamsim-bot",
+  "version": "1.0.0",
+  "description": "RoamSIM WhatsApp eSIM sales bot",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^4.21.2"
+  }
+}
