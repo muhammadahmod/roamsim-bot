@@ -3,14 +3,52 @@
  * Single-file Express server. No build step required.
  *
  * Environment variables:
- *   PORT            — port to listen on (Render sets this automatically)
- *   PAYMENT_LINK    — fallback Paystack payment URL sent in order confirmations
+ *   PORT                 — port to listen on (Render sets this automatically)
+ *   PAYMENT_LINK         — Paystack payment URL sent in order confirmations
+ *   TWILIO_ACCOUNT_SID   — Twilio account SID (for admin notifications)
+ *   TWILIO_AUTH_TOKEN    — Twilio auth token (for admin notifications)
+ *   TWILIO_FROM          — Twilio WhatsApp sender, e.g. whatsapp:+27XXXXXXXXX
+ *   ADMIN_WHATSAPP       — your WhatsApp number to receive alerts, e.g. whatsapp:+27XXXXXXXXX
  */
-
 import express from "express";
 import cors from "cors";
 import { randomUUID } from "crypto";
-
+import https from "https";
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN NOTIFICATIONS
+// ─────────────────────────────────────────────────────────────────────────────
+async function notifyAdmin(message) {
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const from = process.env.TWILIO_FROM;
+  const to = process.env.ADMIN_WHATSAPP;
+  if (!sid || !token || !from || !to) {
+    console.log("[ADMIN NOTIFY - not configured]", message);
+    return;
+  }
+  const body = new URLSearchParams({ From: from, To: to, Body: message }).toString();
+  const options = {
+    hostname: "api.twilio.com",
+    path: `/2010-04-01/Accounts/${sid}/Messages.json`,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: "Basic " + Buffer.from(`${sid}:${token}`).toString("base64"),
+    },
+  };
+  return new Promise((resolve) => {
+    const req = https.request(options, (res) => {
+      res.on("data", () => {});
+      res.on("end", resolve);
+    });
+    req.on("error", (e) => console.error("[ADMIN NOTIFY ERROR]", e.message));
+    req.write(body);
+    req.end();
+  });
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// CATALOG
+// ─────────────────────────────────────────────────────────────────────────────
 const catalog = [
   {
     id: "uk",
@@ -18,8 +56,8 @@ const catalog = [
     emoji: "🇬🇧",
     aliases: ["uk", "united kingdom", "britain", "england", "london", "scotland", "wales"],
     plans: [
-      { id: "uk-5gb-7d",        name: "UK Starter",   data: "5 GB",      validity: "7 days",  priceZar: 249 },
-      { id: "uk-15gb-30d",      name: "UK Explorer",  data: "15 GB",     validity: "30 days", priceZar: 549 },
+      { id: "uk-5gb-7d",       name: "UK Starter",   data: "5 GB",      validity: "7 days",  priceZar: 249 },
+      { id: "uk-15gb-30d",     name: "UK Explorer",  data: "15 GB",     validity: "30 days", priceZar: 549 },
       { id: "uk-unlimited-30d", name: "UK Unlimited", data: "Unlimited", validity: "30 days", priceZar: 899 },
     ],
   },
@@ -83,12 +121,10 @@ const catalog = [
     ],
   },
 ];
-
 function findDestination(text) {
   const lower = text.toLowerCase().trim();
   return catalog.find((dest) => dest.aliases.some((alias) => lower.includes(alias))) ?? null;
 }
-
 function findPlan(destination, selection) {
   const trimmed = selection.trim();
   const num = parseInt(trimmed, 10);
@@ -98,27 +134,27 @@ function findPlan(destination, selection) {
   const lower = trimmed.toLowerCase();
   return destination.plans.find((p) => p.name.toLowerCase().includes(lower) || p.id === lower) ?? null;
 }
-
+// ─────────────────────────────────────────────────────────────────────────────
+// CONVERSATION STATE
+// ─────────────────────────────────────────────────────────────────────────────
 const conversations = new Map();
-
 function getConversation(from) {
   if (!conversations.has(from)) {
     conversations.set(from, { step: "greeting", lastUpdated: new Date() });
   }
   return conversations.get(from);
 }
-
 function setConversation(from, update) {
   conversations.set(from, { ...getConversation(from), ...update, lastUpdated: new Date() });
 }
-
 function resetConversation(from) {
   conversations.set(from, { step: "greeting", lastUpdated: new Date() });
 }
-
+// ─────────────────────────────────────────────────────────────────────────────
+// ORDERS
+// ─────────────────────────────────────────────────────────────────────────────
 const orders = new Map();
 const referenceIndex = new Map();
-
 function generateReference() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let suffix = "";
@@ -127,7 +163,6 @@ function generateReference() {
   if (referenceIndex.has(ref)) return generateReference();
   return ref;
 }
-
 function createOrder(params) {
   const reference = generateReference();
   const order = {
@@ -141,12 +176,10 @@ function createOrder(params) {
   referenceIndex.set(reference, order.id);
   return order;
 }
-
 function findOrderByReference(reference) {
   const id = referenceIndex.get(reference.trim().toUpperCase());
   return id ? (orders.get(id) ?? null) : null;
 }
-
 function updateOrderStatus(id, status) {
   const order = orders.get(id);
   if (!order) return null;
@@ -154,13 +187,14 @@ function updateOrderStatus(id, status) {
   orders.set(id, updated);
   return updated;
 }
-
 function listOrders() {
   return Array.from(orders.values()).sort(
     (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
   );
 }
-
+// ─────────────────────────────────────────────────────────────────────────────
+// TWIML
+// ─────────────────────────────────────────────────────────────────────────────
 function twimlMessage(text) {
   const escaped = text
     .replace(/&/g, "&amp;")
@@ -168,7 +202,9 @@ function twimlMessage(text) {
     .replace(/>/g, "&gt;");
   return `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escaped}</Message></Response>`;
 }
-
+// ─────────────────────────────────────────────────────────────────────────────
+// MESSAGE TEMPLATES
+// ─────────────────────────────────────────────────────────────────────────────
 function welcomeMessage() {
   const list = catalog.map((d, i) => `${i + 1}. ${d.emoji} ${d.name}`).join("\n");
   return (
@@ -182,22 +218,18 @@ function welcomeMessage() {
     `📍 *Which country are you travelling to?*\n\n${list}\n\nReply with a number or type your destination.`
   );
 }
-
 function plansMessage(destName, plans) {
   const list = plans
     .map((p, i) => `*${i + 1}. ${p.name}*\n   📶 ${p.data} | ⏱ ${p.validity} | 💰 R${p.priceZar}`)
     .join("\n\n");
   return `✅ *eSIM Plans for ${destName}*\n\n${list}\n\nReply with *1*, *2*, or *3* to select a plan.`;
 }
-
 function askNameMessage(planName, priceZar) {
   return `👍 *${planName}* (R${priceZar}) — great choice!\n\nTo complete your order I just need a couple of details.\n\n📝 *What is your full name?*`;
 }
-
 function askEmailMessage(name) {
   return `Thanks, ${name}! 📧\n\n*What is your email address?*\n\nYour eSIM QR code and receipt will be sent here, so please double-check it.`;
 }
-
 function orderConfirmationMessage(planName, destName, priceZar, reference, customerName, paymentUrl) {
   const paymentSection = paymentUrl
     ? `💳 *Pay here:*\n${paymentUrl}\n\n👉 *Enter exactly R${priceZar} at checkout.*\n\nOnce you've paid, reply:\n*PAID ${reference}*\n\nWe'll verify your payment and send your eSIM QR code within a few hours. Installation takes under 2 minutes! 🚀`
@@ -208,7 +240,6 @@ function orderConfirmationMessage(planName, destName, priceZar, reference, custo
     `${paymentSection}\n\nType *menu* to start over or *help* for assistance.`
   );
 }
-
 function paymentClaimedMessage(reference, planName) {
   return (
     `✅ *Payment received — thank you!*\n\n` +
@@ -216,7 +247,6 @@ function paymentClaimedMessage(reference, planName) {
     `Our team will verify it and send your eSIM QR code to the email you provided. This usually takes a few hours.\n\nIf you have questions, type *help*.`
   );
 }
-
 function helpMessage() {
   return (
     `ℹ️ *RoamSIM Help*\n\n` +
@@ -227,7 +257,6 @@ function helpMessage() {
     `Questions? Email us at support@roamsim.co.za`
   );
 }
-
 function compatibilityMessage() {
   return (
     `📱 *eSIM Compatibility Guide*\n\n` +
@@ -237,36 +266,40 @@ function compatibilityMessage() {
     `*Carrier-unlocked:*\nYour phone must not be locked to a local network (e.g. Vodacom, MTN).\n\nReady to order? Type *menu* to get started.`
   );
 }
-
 function destinationListMessage() {
   const list = catalog.map((d, i) => `${i + 1}. ${d.emoji} ${d.name}`).join("\n");
   return `🌍 *Available Destinations*\n\n${list}\n\nReply with the country name or number.`;
 }
-
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 }
-
+// ─────────────────────────────────────────────────────────────────────────────
+// EXPRESS APP
+// ─────────────────────────────────────────────────────────────────────────────
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
+// Health check
 app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", uptime: process.uptime(), orders: orders.size, conversations: conversations.size });
+  res.json({
+    status: "ok",
+    uptime: process.uptime(),
+    orders: orders.size,
+    conversations: conversations.size,
+  });
 });
-
+// Admin — list orders
 app.get("/api/admin/orders", (_req, res) => {
   res.json({ orders: listOrders() });
 });
-
+// WhatsApp webhook
 app.post("/api/webhook", (req, res) => {
   const body = (req.body?.Body ?? "").trim();
   const from = req.body?.From ?? "unknown";
   const lower = body.toLowerCase();
-
   res.set("Content-Type", "text/xml");
-
+  // Global keywords
   if (["hi", "hello", "hey", "start", "menu"].some((kw) => lower === kw)) {
     resetConversation(from);
     setConversation(from, { step: "destination_asked" });
@@ -281,26 +314,41 @@ app.post("/api/webhook", (req, res) => {
   if (lower === "compatible" || lower === "compatibility") {
     return void res.send(twimlMessage(compatibilityMessage()));
   }
-
+  // PAID <REF>
   if (lower.startsWith("paid")) {
     const ref = body.trim().split(/\s+/)[1] ?? "";
     const order = findOrderByReference(ref);
     if (!order) {
-      return void res.send(twimlMessage(
-        `❓ I couldn't find an order with reference *${ref || "(none provided)"}*.\n\nPlease check your reference and try again, e.g.:\n*PAID ESIM-A3F9*\n\nType *help* if you need assistance.`
-      ));
+      return void res.send(
+        twimlMessage(
+          `❓ I couldn't find an order with reference *${ref || "(none provided)"}*.\n\nPlease check your reference and try again, e.g.:\n*PAID ESIM-A3F9*\n\nType *help* if you need assistance.`
+        )
+      );
     }
     if (order.status === "payment_claimed" || order.status === "paid") {
-      return void res.send(twimlMessage(
-        `✅ We've already recorded your payment for *${order.planName}* (ref: *${order.reference}*). Our team will send your eSIM QR code shortly.`
-      ));
+      return void res.send(
+        twimlMessage(
+          `✅ We've already recorded your payment for *${order.planName}* (ref: *${order.reference}*). Our team will send your eSIM QR code shortly.`
+        )
+      );
     }
     updateOrderStatus(order.id, "payment_claimed");
+    // Urgent admin alert — action required
+    notifyAdmin(
+      `💳 *PAYMENT CLAIMED — ACTION REQUIRED*\n` +
+      `👤 ${order.customerName}\n` +
+      `📧 ${order.customerEmail}\n` +
+      `📦 ${order.planName} — ${order.destinationName}\n` +
+      `💰 R${order.priceZar}\n` +
+      `🔖 Ref: ${order.reference}\n\n` +
+      `1. Verify payment in Paystack\n` +
+      `2. Provision eSIM from your provider\n` +
+      `3. Send QR code to customer`
+    );
     return void res.send(twimlMessage(paymentClaimedMessage(order.reference, order.planName)));
   }
-
+  // Conversation flow
   const state = getConversation(from);
-
   if (state.step === "greeting" || state.step === "destination_asked") {
     const numChoice = parseInt(lower, 10);
     const destination =
@@ -314,19 +362,19 @@ app.post("/api/webhook", (req, res) => {
     setConversation(from, { step: "plans_shown", selectedDestination: destination });
     return void res.send(twimlMessage(plansMessage(destination.name, destination.plans)));
   }
-
   if (state.step === "plans_shown" && state.selectedDestination) {
     const plan = findPlan(state.selectedDestination, body);
     if (!plan) {
-      return void res.send(twimlMessage(
-        `❓ I didn't catch that. Reply with *1*, *2*, or *3* to choose a plan:\n\n` +
-        plansMessage(state.selectedDestination.name, state.selectedDestination.plans)
-      ));
+      return void res.send(
+        twimlMessage(
+          `❓ I didn't catch that. Reply with *1*, *2*, or *3* to choose a plan:\n\n` +
+            plansMessage(state.selectedDestination.name, state.selectedDestination.plans)
+        )
+      );
     }
     setConversation(from, { step: "ask_name", selectedPlan: plan });
     return void res.send(twimlMessage(askNameMessage(plan.name, plan.priceZar)));
   }
-
   if (state.step === "ask_name") {
     const name = body.trim();
     if (name.length < 2) {
@@ -335,13 +383,19 @@ app.post("/api/webhook", (req, res) => {
     setConversation(from, { step: "ask_email", customerName: name });
     return void res.send(twimlMessage(askEmailMessage(name)));
   }
-
-  if (state.step === "ask_email" && state.selectedDestination && state.selectedPlan && state.customerName) {
+  if (
+    state.step === "ask_email" &&
+    state.selectedDestination &&
+    state.selectedPlan &&
+    state.customerName
+  ) {
     const email = body.trim();
     if (!isValidEmail(email)) {
-      return void res.send(twimlMessage(
-        `That doesn't look like a valid email address. Please try again — this is where your eSIM QR code will be sent.\n\nExample: *yourname@gmail.com*`
-      ));
+      return void res.send(
+        twimlMessage(
+          `That doesn't look like a valid email address. Please try again — this is where your eSIM QR code will be sent.\n\nExample: *yourname@gmail.com*`
+        )
+      );
     }
     const { selectedDestination: dest, selectedPlan: plan, customerName } = state;
     const paymentUrl = process.env.PAYMENT_LINK ?? null;
@@ -355,21 +409,43 @@ app.post("/api/webhook", (req, res) => {
       priceZar: plan.priceZar,
     });
     setConversation(from, { step: "order_placed" });
-    return void res.send(twimlMessage(
-      orderConfirmationMessage(plan.name, dest.name, plan.priceZar, order.reference, customerName, paymentUrl)
-    ));
+    // Notify admin of new order
+    notifyAdmin(
+      `🛒 *New RoamSIM Order*\n` +
+      `👤 ${customerName} (${email})\n` +
+      `📦 ${plan.name} — ${dest.name}\n` +
+      `💰 R${plan.priceZar}\n` +
+      `🔖 Ref: ${order.reference}\n` +
+      `📞 ${from}\n\n` +
+      `Waiting for customer to pay and send PAID ${order.reference}`
+    );
+    return void res.send(
+      twimlMessage(
+        orderConfirmationMessage(
+          plan.name,
+          dest.name,
+          plan.priceZar,
+          order.reference,
+          customerName,
+          paymentUrl
+        )
+      )
+    );
   }
-
   if (state.step === "order_placed") {
-    return void res.send(twimlMessage(
-      `✅ Your order has been placed. Please complete payment via the link we sent, then reply *PAID <your reference>* to let us know.\n\nType *menu* to start a new order or *help* for assistance.`
-    ));
+    return void res.send(
+      twimlMessage(
+        `✅ Your order has been placed. Please complete payment via the link we sent, then reply *PAID <your reference>* to let us know.\n\nType *menu* to start a new order or *help* for assistance.`
+      )
+    );
   }
-
+  // Fallback
   resetConversation(from);
   setConversation(from, { step: "destination_asked" });
   res.send(twimlMessage(welcomeMessage()));
 });
-
+// ─────────────────────────────────────────────────────────────────────────────
+// START
+// ─────────────────────────────────────────────────────────────────────────────
 const port = parseInt(process.env.PORT ?? "3000", 10);
 app.listen(port, () => console.log(`RoamSIM bot running on port ${port}`));
