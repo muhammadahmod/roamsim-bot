@@ -17,16 +17,18 @@ import https from "https";
 // ─────────────────────────────────────────────────────────────────────────────
 // ADMIN NOTIFICATIONS
 // ─────────────────────────────────────────────────────────────────────────────
-async function notifyAdmin(message) {
+// Send a WhatsApp message (optionally with a media attachment) via Twilio.
+function sendWhatsApp(to, message, mediaUrl) {
   const sid = process.env.TWILIO_ACCOUNT_SID;
   const token = process.env.TWILIO_AUTH_TOKEN;
   const from = process.env.TWILIO_FROM;
-  const to = process.env.ADMIN_WHATSAPP;
   if (!sid || !token || !from || !to) {
-    console.log("[ADMIN NOTIFY - not configured]", message);
-    return;
+    console.log("[WHATSAPP SEND - not configured]", to, message);
+    return Promise.resolve();
   }
-  const body = new URLSearchParams({ From: from, To: to, Body: message }).toString();
+  const params = { From: from, To: to, Body: message };
+  if (mediaUrl) params.MediaUrl = mediaUrl;
+  const payload = new URLSearchParams(params).toString();
   const options = {
     hostname: "api.twilio.com",
     path: `/2010-04-01/Accounts/${sid}/Messages.json`,
@@ -38,13 +40,130 @@ async function notifyAdmin(message) {
   };
   return new Promise((resolve) => {
     const req = https.request(options, (res) => {
-      res.on("data", () => {});
-      res.on("end", resolve);
+      let data = "";
+      res.on("data", (c) => (data += c));
+      res.on("end", () => {
+        if (res.statusCode >= 400) console.error("[WHATSAPP SEND ERROR]", res.statusCode, data);
+        resolve();
+      });
     });
-    req.on("error", (e) => console.error("[ADMIN NOTIFY ERROR]", e.message));
-    req.write(body);
+    req.on("error", (e) => { console.error("[WHATSAPP SEND ERROR]", e.message); resolve(); });
+    req.write(payload);
     req.end();
   });
+}
+
+function notifyAdmin(message) {
+  const to = process.env.ADMIN_WHATSAPP;
+  if (!to) {
+    console.log("[ADMIN NOTIFY - not configured]", message);
+    return Promise.resolve();
+  }
+  return sendWhatsApp(to, message);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AIRALO PARTNER API (eSIM auto-provisioning)
+//   Env: AIRALO_CLIENT_ID, AIRALO_CLIENT_SECRET, AIRALO_BASE_URL
+//   Default base is the sandbox; set AIRALO_BASE_URL to the production host
+//   (https://partners-api.airalo.com) when ready to sell real eSIMs.
+// ─────────────────────────────────────────────────────────────────────────────
+const AIRALO_BASE = process.env.AIRALO_BASE_URL || "https://sandbox-partners-api.airalo.com";
+
+// Map each catalog plan id -> Airalo package_id (slug).
+// Populate these from GET /api/admin/airalo/packages after credentials are set.
+// An empty value means "not yet mapped" and fulfillment will report it clearly.
+const PLAN_TO_AIRALO_PACKAGE = {
+  "uk-5gb-7d": "",        "uk-15gb-30d": "",       "uk-unlimited-30d": "",
+  "uae-5gb-7d": "",       "uae-15gb-30d": "",      "uae-30gb-30d": "",
+  "aus-5gb-14d": "",      "aus-15gb-30d": "",      "aus-unlimited-30d": "",
+  "us-5gb-7d": "",        "us-15gb-30d": "",       "us-unlimited-30d": "",
+  "eu-5gb-14d": "",       "eu-15gb-30d": "",       "eu-unlimited-30d": "",
+  "ksa-5gb-14d": "",      "ksa-15gb-30d": "",      "ksa-30gb-30d": "",
+};
+
+let airaloTokenCache = { token: null, expiresAt: 0 };
+
+function airaloHttp(method, path, { token, form } = {}) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(AIRALO_BASE + path);
+    const body = form ? new URLSearchParams(form).toString() : null;
+    const headers = { Accept: "application/json" };
+    if (token) headers.Authorization = "Bearer " + token;
+    if (body) headers["Content-Type"] = "application/x-www-form-urlencoded";
+    const options = { hostname: url.hostname, path: url.pathname + url.search, method, headers };
+    const req = https.request(options, (res) => {
+      let data = "";
+      res.on("data", (c) => (data += c));
+      res.on("end", () => {
+        let json;
+        try { json = JSON.parse(data); } catch { json = { raw: data }; }
+        if (res.statusCode >= 400) {
+          return reject(new Error(`Airalo ${method} ${path} -> ${res.statusCode}: ${data.slice(0, 300)}`));
+        }
+        resolve(json);
+      });
+    });
+    req.on("error", reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+async function getAiraloToken() {
+  const id = process.env.AIRALO_CLIENT_ID;
+  const secret = process.env.AIRALO_CLIENT_SECRET;
+  if (!id || !secret) throw new Error("Airalo credentials not configured (set AIRALO_CLIENT_ID / AIRALO_CLIENT_SECRET)");
+  if (airaloTokenCache.token && Date.now() < airaloTokenCache.expiresAt) return airaloTokenCache.token;
+  const res = await airaloHttp("POST", "/v2/token", {
+    form: { client_id: id, client_secret: secret, grant_type: "client_credentials" },
+  });
+  const token = res?.data?.access_token;
+  if (!token) throw new Error("Airalo token missing in response");
+  const ttlMs = (res?.data?.expires_in || 86400) * 1000;
+  airaloTokenCache = { token, expiresAt: Date.now() + ttlMs - 60000 };
+  return token;
+}
+
+async function airaloListPackages(country) {
+  const token = await getAiraloToken();
+  const q = country ? `?filter[country]=${encodeURIComponent(country)}&limit=100` : "?limit=100";
+  return airaloHttp("GET", "/v2/packages" + q, { token });
+}
+
+async function airaloSubmitOrder(packageId, description, toEmail) {
+  const token = await getAiraloToken();
+  const form = { package_id: packageId, quantity: 1, type: "sim", description: description || "RoamSIM order" };
+  if (toEmail) form.to_email = toEmail; // Airalo emails the customer a white-label install guide.
+  return airaloHttp("POST", "/v2/orders", { token, form });
+}
+
+// Provision an eSIM for a paid order and deliver the QR to the customer.
+async function fulfillOrder(order) {
+  const packageId = PLAN_TO_AIRALO_PACKAGE[order.planId];
+  if (!packageId) throw new Error(`No Airalo package mapped for plan "${order.planId}" — update PLAN_TO_AIRALO_PACKAGE`);
+  const res = await airaloSubmitOrder(packageId, order.reference, order.customerEmail);
+  const sim = res?.data?.sims?.[0];
+  if (!sim) throw new Error("Airalo order returned no SIM");
+  const lines = [
+    `🎉 *Your RoamSIM eSIM for ${order.destinationName} is ready!*`,
+    ``,
+    `📦 ${order.planName}`,
+    `🔖 Ref: ${order.reference}`,
+    ``,
+    `📲 *Install:* scan the QR code image above in your phone's eSIM settings (Settings → Mobile/Cellular → Add eSIM).`,
+    sim.qrcode ? `\nPrefer manual setup? Use this activation code:\n${sim.qrcode}` : null,
+    sim.direct_apple_installation_url ? `\niPhone (iOS 17.4+): tap to install →\n${sim.direct_apple_installation_url}` : null,
+    `\nWe've also emailed full instructions to ${order.customerEmail}. Safe travels! ✈️`,
+  ].filter(Boolean).join("\n");
+  await sendWhatsApp(order.senderNumber, lines, sim.qrcode_url);
+  updateOrderStatus(order.id, "fulfilled");
+  const stored = orders.get(order.id);
+  if (stored) {
+    stored.esim = { iccid: sim.iccid, qrcode_url: sim.qrcode_url, qrcode: sim.qrcode };
+    orders.set(order.id, stored);
+  }
+  return sim;
 }
 // ─────────────────────────────────────────────────────────────────────────────
 // CATALOG
@@ -293,12 +412,56 @@ app.get("/api/health", (_req, res) => {
 app.get("/api/admin/orders", (_req, res) => {
   res.json({ orders: listOrders() });
 });
+
+// Admin — list available Airalo packages (used to build PLAN_TO_AIRALO_PACKAGE).
+// Optional ?country=GB|AE|US|... filter. Returns Airalo's catalog only (no secrets).
+app.get("/api/admin/airalo/packages", async (req, res) => {
+  try {
+    const data = await airaloListPackages(req.query.country);
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Admin — show current plan -> Airalo package mapping and which are unmapped.
+app.get("/api/admin/airalo/mapping", (_req, res) => {
+  const unmapped = Object.entries(PLAN_TO_AIRALO_PACKAGE)
+    .filter(([, v]) => !v)
+    .map(([k]) => k);
+  res.json({ mapping: PLAN_TO_AIRALO_PACKAGE, unmapped, configured: !!process.env.AIRALO_CLIENT_ID });
+});
 // WhatsApp webhook
 app.post("/api/webhook", (req, res) => {
   const body = (req.body?.Body ?? "").trim();
   const from = req.body?.From ?? "unknown";
   const lower = body.toLowerCase();
   res.set("Content-Type", "text/xml");
+  // ── Admin-only command: FULFILL <REF> (provision + deliver eSIM via Airalo) ──
+  // Gated to the operator's own WhatsApp number. Send this only after you have
+  // verified the customer's payment in Paystack.
+  if (process.env.ADMIN_WHATSAPP && from === process.env.ADMIN_WHATSAPP && lower.startsWith("fulfill")) {
+    const ref = body.trim().split(/\s+/)[1] ?? "";
+    const order = findOrderByReference(ref);
+    if (!order) {
+      return void res.send(twimlMessage(`❓ No order found for *${ref || "(none)"}*. Usage: FULFILL ESIM-XXXX`));
+    }
+    // Acknowledge immediately, then provision asynchronously (Airalo can take a few seconds).
+    res.send(twimlMessage(`⏳ Provisioning eSIM for *${order.reference}* (${order.planName} — ${order.customerName})...`));
+    fulfillOrder(order)
+      .then((sim) =>
+        notifyAdmin(
+          `✅ *Fulfilled ${order.reference}*\n` +
+          `${order.planName} sent to ${order.customerName}\n📧 ${order.customerEmail}\n📲 ${order.senderNumber}\n` +
+          `ICCID: ${sim.iccid || "n/a"}`
+        )
+      )
+      .catch((e) => {
+        updateOrderStatus(order.id, "fulfillment_failed");
+        notifyAdmin(`❌ *Fulfillment FAILED for ${order.reference}*\n${e.message}\n\nProvision this one manually.`);
+      });
+    return;
+  }
   // Global keywords
   if (["hi", "hello", "hey", "start", "menu"].some((kw) => lower === kw)) {
     resetConversation(from);
