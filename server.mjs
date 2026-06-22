@@ -254,7 +254,7 @@ function helpMessage() {
     `*How it works:*\n` +
     `1️⃣ Tell me your destination\n2️⃣ Choose a data plan\n3️⃣ Provide your name & email\n4️⃣ Pay via the link I send\n5️⃣ Reply *PAID <your reference>* after paying\n6️⃣ Receive your eSIM QR code by email & WhatsApp\n\n` +
     `*Keywords:*\n• *hi / menu* — restart\n• *plans* — list destinations\n• *compatible* — eSIM compatibility guide\n• *help* — this message\n\n` +
-    `Questions? Email us at support@roamsim.co.za`
+    `Questions? Email us at muhammadahmod06@gmail.com`
   );
 }
 function compatibilityMessage() {
