@@ -1,23 +1,16 @@
 /**
- * RoamSIM WhatsApp Bot — server.mjs
- * Single-file Express server. No build step required.
- *
- * Environment variables:
- *   PORT                 — port to listen on (Render sets this automatically)
- *   PAYMENT_LINK         — Paystack payment URL sent in order confirmations
- *   TWILIO_ACCOUNT_SID   — Twilio account SID (for admin notifications)
- *   TWILIO_AUTH_TOKEN    — Twilio auth token (for admin notifications)
- *   TWILIO_FROM          — Twilio WhatsApp sender, e.g. whatsapp:+27XXXXXXXXX
- *   ADMIN_WHATSAPP       — your WhatsApp number to receive alerts, e.g. whatsapp:+27XXXXXXXXX
+ * RoamSIM WhatsApp Bot — server.mjs (single-file Express server, no build step)
+ * Env: PORT, PAYMENT_LINK, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM,
+ *      ADMIN_WHATSAPP, ADMIN_KEY, DATABASE_URL (optional Postgres),
+ *      AIRALO_CLIENT_ID, AIRALO_CLIENT_SECRET, AIRALO_BASE_URL (optional).
  */
 import express from "express";
 import cors from "cors";
 import { randomUUID } from "crypto";
 import https from "https";
-// ─────────────────────────────────────────────────────────────────────────────
-// ADMIN NOTIFICATIONS
-// ─────────────────────────────────────────────────────────────────────────────
-// Send a WhatsApp message (optionally with a media attachment) via Twilio.
+import { dashboardHtml } from "./dashboard.mjs";
+
+// ── WhatsApp (Twilio) messaging ──
 function sendWhatsApp(to, message, mediaUrl) {
   const sid = process.env.TWILIO_ACCOUNT_SID;
   const token = process.env.TWILIO_AUTH_TOKEN;
@@ -52,38 +45,24 @@ function sendWhatsApp(to, message, mediaUrl) {
     req.end();
   });
 }
-
 function notifyAdmin(message) {
   const to = process.env.ADMIN_WHATSAPP;
-  if (!to) {
-    console.log("[ADMIN NOTIFY - not configured]", message);
-    return Promise.resolve();
-  }
+  if (!to) { console.log("[ADMIN NOTIFY - not configured]", message); return Promise.resolve(); }
   return sendWhatsApp(to, message);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// AIRALO PARTNER API (eSIM auto-provisioning)
-//   Env: AIRALO_CLIENT_ID, AIRALO_CLIENT_SECRET, AIRALO_BASE_URL
-//   Default base is the sandbox; set AIRALO_BASE_URL to the production host
-//   (https://partners-api.airalo.com) when ready to sell real eSIMs.
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Airalo Partner API (eSIM auto-provisioning) ──
 const AIRALO_BASE = process.env.AIRALO_BASE_URL || "https://sandbox-partners-api.airalo.com";
-
-// Map each catalog plan id -> Airalo package_id (slug).
-// Populate these from GET /api/admin/airalo/packages after credentials are set.
-// An empty value means "not yet mapped" and fulfillment will report it clearly.
+// Map catalog plan id -> Airalo package_id. Populate from /api/admin/airalo/packages.
 const PLAN_TO_AIRALO_PACKAGE = {
-  "uk-5gb-7d": "",        "uk-15gb-30d": "",       "uk-unlimited-30d": "",
-  "uae-5gb-7d": "",       "uae-15gb-30d": "",      "uae-30gb-30d": "",
-  "aus-5gb-14d": "",      "aus-15gb-30d": "",      "aus-unlimited-30d": "",
-  "us-5gb-7d": "",        "us-15gb-30d": "",       "us-unlimited-30d": "",
-  "eu-5gb-14d": "",       "eu-15gb-30d": "",       "eu-unlimited-30d": "",
-  "ksa-5gb-14d": "",      "ksa-15gb-30d": "",      "ksa-30gb-30d": "",
+  "uk-5gb-7d": "", "uk-15gb-30d": "", "uk-unlimited-30d": "",
+  "uae-5gb-7d": "", "uae-15gb-30d": "", "uae-30gb-30d": "",
+  "aus-5gb-14d": "", "aus-15gb-30d": "", "aus-unlimited-30d": "",
+  "us-5gb-7d": "", "us-15gb-30d": "", "us-unlimited-30d": "",
+  "eu-5gb-14d": "", "eu-15gb-30d": "", "eu-unlimited-30d": "",
+  "ksa-5gb-14d": "", "ksa-15gb-30d": "", "ksa-30gb-30d": "",
 };
-
 let airaloTokenCache = { token: null, expiresAt: 0 };
-
 function airaloHttp(method, path, { token, form } = {}) {
   return new Promise((resolve, reject) => {
     const url = new URL(AIRALO_BASE + path);
@@ -98,9 +77,7 @@ function airaloHttp(method, path, { token, form } = {}) {
       res.on("end", () => {
         let json;
         try { json = JSON.parse(data); } catch { json = { raw: data }; }
-        if (res.statusCode >= 400) {
-          return reject(new Error(`Airalo ${method} ${path} -> ${res.statusCode}: ${data.slice(0, 300)}`));
-        }
+        if (res.statusCode >= 400) return reject(new Error(`Airalo ${method} ${path} -> ${res.statusCode}: ${data.slice(0, 300)}`));
         resolve(json);
       });
     });
@@ -109,36 +86,30 @@ function airaloHttp(method, path, { token, form } = {}) {
     req.end();
   });
 }
-
 async function getAiraloToken() {
   const id = process.env.AIRALO_CLIENT_ID;
   const secret = process.env.AIRALO_CLIENT_SECRET;
-  if (!id || !secret) throw new Error("Airalo credentials not configured (set AIRALO_CLIENT_ID / AIRALO_CLIENT_SECRET)");
+  if (!id || !secret) throw new Error("Airalo credentials not configured");
   if (airaloTokenCache.token && Date.now() < airaloTokenCache.expiresAt) return airaloTokenCache.token;
   const res = await airaloHttp("POST", "/v2/token", {
     form: { client_id: id, client_secret: secret, grant_type: "client_credentials" },
   });
   const token = res?.data?.access_token;
   if (!token) throw new Error("Airalo token missing in response");
-  const ttlMs = (res?.data?.expires_in || 86400) * 1000;
-  airaloTokenCache = { token, expiresAt: Date.now() + ttlMs - 60000 };
+  airaloTokenCache = { token, expiresAt: Date.now() + (res?.data?.expires_in || 86400) * 1000 - 60000 };
   return token;
 }
-
 async function airaloListPackages(country) {
   const token = await getAiraloToken();
   const q = country ? `?filter[country]=${encodeURIComponent(country)}&limit=100` : "?limit=100";
   return airaloHttp("GET", "/v2/packages" + q, { token });
 }
-
 async function airaloSubmitOrder(packageId, description, toEmail) {
   const token = await getAiraloToken();
   const form = { package_id: packageId, quantity: 1, type: "sim", description: description || "RoamSIM order" };
-  if (toEmail) form.to_email = toEmail; // Airalo emails the customer a white-label install guide.
+  if (toEmail) form.to_email = toEmail;
   return airaloHttp("POST", "/v2/orders", { token, form });
 }
-
-// Provision an eSIM for a paid order and deliver the QR to the customer.
 async function fulfillOrder(order) {
   const packageId = PLAN_TO_AIRALO_PACKAGE[order.planId];
   if (!packageId) throw new Error(`No Airalo package mapped for plan "${order.planId}" — update PLAN_TO_AIRALO_PACKAGE`);
@@ -162,83 +133,56 @@ async function fulfillOrder(order) {
   if (stored) {
     stored.esim = { iccid: sim.iccid, qrcode_url: sim.qrcode_url, qrcode: sim.qrcode };
     orders.set(order.id, stored);
+    persistOrder(stored);
   }
   return sim;
 }
-// ─────────────────────────────────────────────────────────────────────────────
-// CATALOG
-// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Catalog ──
 const catalog = [
-  {
-    id: "uk",
-    name: "United Kingdom",
-    emoji: "🇬🇧",
+  { id: "uk", name: "United Kingdom", emoji: "🇬🇧",
     aliases: ["uk", "united kingdom", "britain", "england", "london", "scotland", "wales"],
     plans: [
-      { id: "uk-5gb-7d",       name: "UK Starter",   data: "5 GB",      validity: "7 days",  priceZar: 249 },
-      { id: "uk-15gb-30d",     name: "UK Explorer",  data: "15 GB",     validity: "30 days", priceZar: 549 },
+      { id: "uk-5gb-7d", name: "UK Starter", data: "5 GB", validity: "7 days", priceZar: 249 },
+      { id: "uk-15gb-30d", name: "UK Explorer", data: "15 GB", validity: "30 days", priceZar: 549 },
       { id: "uk-unlimited-30d", name: "UK Unlimited", data: "Unlimited", validity: "30 days", priceZar: 899 },
-    ],
-  },
-  {
-    id: "uae",
-    name: "United Arab Emirates (Dubai)",
-    emoji: "🇦🇪",
+    ] },
+  { id: "uae", name: "United Arab Emirates (Dubai)", emoji: "🇦🇪",
     aliases: ["uae", "dubai", "abu dhabi", "united arab emirates", "emirates"],
     plans: [
-      { id: "uae-5gb-7d",   name: "UAE Starter",  data: "5 GB",  validity: "7 days",  priceZar: 229 },
+      { id: "uae-5gb-7d", name: "UAE Starter", data: "5 GB", validity: "7 days", priceZar: 229 },
       { id: "uae-15gb-30d", name: "UAE Explorer", data: "15 GB", validity: "30 days", priceZar: 499 },
-      { id: "uae-30gb-30d", name: "UAE Plus",     data: "30 GB", validity: "30 days", priceZar: 799 },
-    ],
-  },
-  {
-    id: "australia",
-    name: "Australia",
-    emoji: "🇦🇺",
+      { id: "uae-30gb-30d", name: "UAE Plus", data: "30 GB", validity: "30 days", priceZar: 799 },
+    ] },
+  { id: "australia", name: "Australia", emoji: "🇦🇺",
     aliases: ["australia", "sydney", "melbourne", "brisbane", "perth", "oz", "aus"],
     plans: [
-      { id: "aus-5gb-14d",       name: "Aus Starter",   data: "5 GB",      validity: "14 days", priceZar: 299 },
-      { id: "aus-15gb-30d",      name: "Aus Explorer",  data: "15 GB",     validity: "30 days", priceZar: 599 },
+      { id: "aus-5gb-14d", name: "Aus Starter", data: "5 GB", validity: "14 days", priceZar: 299 },
+      { id: "aus-15gb-30d", name: "Aus Explorer", data: "15 GB", validity: "30 days", priceZar: 599 },
       { id: "aus-unlimited-30d", name: "Aus Unlimited", data: "Unlimited", validity: "30 days", priceZar: 999 },
-    ],
-  },
-  {
-    id: "usa",
-    name: "United States",
-    emoji: "🇺🇸",
+    ] },
+  { id: "usa", name: "United States", emoji: "🇺🇸",
     aliases: ["usa", "us", "united states", "america", "new york", "los angeles", "miami", "nyc"],
     plans: [
-      { id: "us-5gb-7d",        name: "US Starter",   data: "5 GB",      validity: "7 days",  priceZar: 279 },
-      { id: "us-15gb-30d",      name: "US Explorer",  data: "15 GB",     validity: "30 days", priceZar: 599 },
+      { id: "us-5gb-7d", name: "US Starter", data: "5 GB", validity: "7 days", priceZar: 279 },
+      { id: "us-15gb-30d", name: "US Explorer", data: "15 GB", validity: "30 days", priceZar: 599 },
       { id: "us-unlimited-30d", name: "US Unlimited", data: "Unlimited", validity: "30 days", priceZar: 999 },
-    ],
-  },
-  {
-    id: "europe",
-    name: "Europe (Schengen)",
-    emoji: "🇪🇺",
-    aliases: [
-      "europe", "european", "schengen", "france", "paris", "germany", "berlin",
-      "italy", "rome", "spain", "madrid", "amsterdam", "netherlands", "portugal",
-      "lisbon", "switzerland", "austria", "greece",
-    ],
+    ] },
+  { id: "europe", name: "Europe (Schengen)", emoji: "🇪🇺",
+    aliases: ["europe", "european", "schengen", "france", "paris", "germany", "berlin", "italy", "rome",
+      "spain", "madrid", "amsterdam", "netherlands", "portugal", "lisbon", "switzerland", "austria", "greece"],
     plans: [
-      { id: "eu-5gb-14d",       name: "Europe Starter",   data: "5 GB",      validity: "14 days", priceZar: 349 },
-      { id: "eu-15gb-30d",      name: "Europe Explorer",  data: "15 GB",     validity: "30 days", priceZar: 699 },
+      { id: "eu-5gb-14d", name: "Europe Starter", data: "5 GB", validity: "14 days", priceZar: 349 },
+      { id: "eu-15gb-30d", name: "Europe Explorer", data: "15 GB", validity: "30 days", priceZar: 699 },
       { id: "eu-unlimited-30d", name: "Europe Unlimited", data: "Unlimited", validity: "30 days", priceZar: 1099 },
-    ],
-  },
-  {
-    id: "saudi-arabia",
-    name: "Saudi Arabia",
-    emoji: "🇸🇦",
+    ] },
+  { id: "saudi-arabia", name: "Saudi Arabia", emoji: "🇸🇦",
     aliases: ["saudi arabia", "saudi", "ksa", "riyadh", "jeddah", "mecca", "medina", "umrah", "hajj", "makkah"],
     plans: [
-      { id: "ksa-5gb-14d",  name: "KSA Starter",  data: "5 GB",  validity: "14 days", priceZar: 259 },
+      { id: "ksa-5gb-14d", name: "KSA Starter", data: "5 GB", validity: "14 days", priceZar: 259 },
       { id: "ksa-15gb-30d", name: "KSA Explorer", data: "15 GB", validity: "30 days", priceZar: 549 },
-      { id: "ksa-30gb-30d", name: "KSA Plus",     data: "30 GB", validity: "30 days", priceZar: 849 },
-    ],
-  },
+      { id: "ksa-30gb-30d", name: "KSA Plus", data: "30 GB", validity: "30 days", priceZar: 849 },
+    ] },
 ];
 function findDestination(text) {
   const lower = text.toLowerCase().trim();
@@ -247,20 +191,15 @@ function findDestination(text) {
 function findPlan(destination, selection) {
   const trimmed = selection.trim();
   const num = parseInt(trimmed, 10);
-  if (!isNaN(num) && num >= 1 && num <= destination.plans.length) {
-    return destination.plans[num - 1];
-  }
+  if (!isNaN(num) && num >= 1 && num <= destination.plans.length) return destination.plans[num - 1];
   const lower = trimmed.toLowerCase();
   return destination.plans.find((p) => p.name.toLowerCase().includes(lower) || p.id === lower) ?? null;
 }
-// ─────────────────────────────────────────────────────────────────────────────
-// CONVERSATION STATE
-// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Conversation state ──
 const conversations = new Map();
 function getConversation(from) {
-  if (!conversations.has(from)) {
-    conversations.set(from, { step: "greeting", lastUpdated: new Date() });
-  }
+  if (!conversations.has(from)) conversations.set(from, { step: "greeting", lastUpdated: new Date() });
   return conversations.get(from);
 }
 function setConversation(from, update) {
@@ -269,9 +208,8 @@ function setConversation(from, update) {
 function resetConversation(from) {
   conversations.set(from, { step: "greeting", lastUpdated: new Date() });
 }
-// ─────────────────────────────────────────────────────────────────────────────
-// ORDERS
-// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Orders ──
 const orders = new Map();
 const referenceIndex = new Map();
 function generateReference() {
@@ -284,15 +222,10 @@ function generateReference() {
 }
 function createOrder(params) {
   const reference = generateReference();
-  const order = {
-    id: randomUUID(),
-    reference,
-    ...params,
-    status: "awaiting_payment",
-    createdAt: new Date().toISOString(),
-  };
+  const order = { id: randomUUID(), reference, ...params, status: "awaiting_payment", createdAt: new Date().toISOString() };
   orders.set(order.id, order);
   referenceIndex.set(reference, order.id);
+  persistOrder(order);
   return order;
 }
 function findOrderByReference(reference) {
@@ -304,26 +237,88 @@ function updateOrderStatus(id, status) {
   if (!order) return null;
   const updated = { ...order, status };
   orders.set(id, updated);
+  persistOrder(updated);
   return updated;
 }
 function listOrders() {
-  return Array.from(orders.values()).sort(
-    (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
-  );
+  return Array.from(orders.values()).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
-// ─────────────────────────────────────────────────────────────────────────────
-// TWIML
-// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Persistence (optional Postgres; set DATABASE_URL to make orders durable) ──
+let dbPool = null;
+async function initDb() {
+  if (!process.env.DATABASE_URL) {
+    console.log("[DB] No DATABASE_URL — using in-memory storage (resets on restart).");
+    return;
+  }
+  try {
+    const pg = await import("pg");
+    const Pool = (pg.default ?? pg).Pool;
+    dbPool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+    await dbPool.query(`CREATE TABLE IF NOT EXISTS roamsim_orders (
+      id text PRIMARY KEY, reference text UNIQUE, data jsonb NOT NULL, updated_at timestamptz DEFAULT now())`);
+    const { rows } = await dbPool.query("SELECT data FROM roamsim_orders");
+    for (const row of rows) {
+      const o = row.data;
+      if (o && o.id) { orders.set(o.id, o); if (o.reference) referenceIndex.set(o.reference, o.id); }
+    }
+    console.log(`[DB] Connected. Loaded ${rows.length} order(s).`);
+  } catch (e) {
+    console.error("[DB] Init failed — falling back to in-memory:", e.message);
+    dbPool = null;
+  }
+}
+function persistOrder(order) {
+  if (!dbPool) return;
+  dbPool.query(
+    `INSERT INTO roamsim_orders (id, reference, data, updated_at) VALUES ($1,$2,$3::jsonb,now())
+     ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
+    [order.id, order.reference, JSON.stringify(order)]
+  ).catch((e) => console.error("[DB] persist error:", e.message));
+}
+
+// ── Analytics + admin auth ──
+const CONFIRMED_STATUSES = new Set(["payment_claimed", "paid", "fulfilled"]);
+function computeStats() {
+  const all = listOrders();
+  let revenueZar = 0, confirmed = 0, fulfilled = 0;
+  const byStatus = {}, byDest = {}, byPlan = {};
+  for (const o of all) {
+    byStatus[o.status] = (byStatus[o.status] || 0) + 1;
+    if (CONFIRMED_STATUSES.has(o.status)) {
+      const amt = o.priceZar || 0;
+      revenueZar += amt; confirmed += 1;
+      byDest[o.destinationName] = byDest[o.destinationName] || { count: 0, revenue: 0 };
+      byDest[o.destinationName].count += 1; byDest[o.destinationName].revenue += amt;
+      byPlan[o.planName] = byPlan[o.planName] || { count: 0, revenue: 0 };
+      byPlan[o.planName].count += 1; byPlan[o.planName].revenue += amt;
+    }
+    if (o.status === "fulfilled") fulfilled += 1;
+  }
+  const total = all.length;
+  return {
+    total, confirmed, fulfilled, awaitingPayment: byStatus["awaiting_payment"] || 0, revenueZar,
+    conversionRate: total ? Math.round((confirmed / total) * 100) : 0, byStatus,
+    topDestinations: Object.entries(byDest).map(([name, v]) => ({ name, ...v })).sort((a, b) => b.revenue - a.revenue),
+    topPlans: Object.entries(byPlan).map(([name, v]) => ({ name, ...v })).sort((a, b) => b.revenue - a.revenue),
+    persistent: !!dbPool, generatedAt: new Date().toISOString(),
+  };
+}
+function requireAdmin(req, res) {
+  const key = process.env.ADMIN_KEY;
+  if (!key) { res.status(403).json({ error: "Admin disabled — set the ADMIN_KEY env var to enable." }); return false; }
+  const provided = req.query.key || req.headers["x-admin-key"];
+  if (provided !== key) { res.status(401).json({ error: "Unauthorized — missing or invalid key." }); return false; }
+  return true;
+}
+
+// ── TwiML ──
 function twimlMessage(text) {
-  const escaped = text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  const escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   return `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escaped}</Message></Response>`;
 }
-// ─────────────────────────────────────────────────────────────────────────────
-// MESSAGE TEMPLATES
-// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Message templates ──
 function welcomeMessage() {
   const list = catalog.map((d, i) => `${i + 1}. ${d.emoji} ${d.name}`).join("\n");
   return (
@@ -338,9 +333,7 @@ function welcomeMessage() {
   );
 }
 function plansMessage(destName, plans) {
-  const list = plans
-    .map((p, i) => `*${i + 1}. ${p.name}*\n   📶 ${p.data} | ⏱ ${p.validity} | 💰 R${p.priceZar}`)
-    .join("\n\n");
+  const list = plans.map((p, i) => `*${i + 1}. ${p.name}*\n   📶 ${p.data} | ⏱ ${p.validity} | 💰 R${p.priceZar}`).join("\n\n");
   return `✅ *eSIM Plans for ${destName}*\n\n${list}\n\nReply with *1*, *2*, or *3* to select a plan.`;
 }
 function askNameMessage(planName, priceZar) {
@@ -392,223 +385,132 @@ function destinationListMessage() {
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 }
-// ─────────────────────────────────────────────────────────────────────────────
-// EXPRESS APP
-// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Express app ──
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-// Health check
+
 app.get("/api/health", (_req, res) => {
-  res.json({
-    status: "ok",
-    uptime: process.uptime(),
-    orders: orders.size,
-    conversations: conversations.size,
-  });
+  res.json({ status: "ok", uptime: process.uptime(), orders: orders.size, conversations: conversations.size, persistent: !!dbPool });
 });
-// Admin — list orders
-app.get("/api/admin/orders", (_req, res) => {
+app.get("/api/admin/orders", (req, res) => {
+  if (!requireAdmin(req, res)) return;
   res.json({ orders: listOrders() });
 });
-
-// Admin — list available Airalo packages (used to build PLAN_TO_AIRALO_PACKAGE).
-// Optional ?country=GB|AE|US|... filter. Returns Airalo's catalog only (no secrets).
-app.get("/api/admin/airalo/packages", async (req, res) => {
-  try {
-    const data = await airaloListPackages(req.query.country);
-    res.json(data);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+app.get("/api/admin/stats", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  res.json({ ...computeStats(), recent: listOrders().slice(0, 25) });
 });
-
-// Admin — show current plan -> Airalo package mapping and which are unmapped.
-app.get("/api/admin/airalo/mapping", (_req, res) => {
-  const unmapped = Object.entries(PLAN_TO_AIRALO_PACKAGE)
-    .filter(([, v]) => !v)
-    .map(([k]) => k);
+app.get("/dashboard", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  res.set("Content-Type", "text/html").send(dashboardHtml());
+});
+app.get("/api/admin/airalo/packages", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try { res.json(await airaloListPackages(req.query.country)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get("/api/admin/airalo/mapping", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const unmapped = Object.entries(PLAN_TO_AIRALO_PACKAGE).filter(([, v]) => !v).map(([k]) => k);
   res.json({ mapping: PLAN_TO_AIRALO_PACKAGE, unmapped, configured: !!process.env.AIRALO_CLIENT_ID });
 });
-// WhatsApp webhook
+
 app.post("/api/webhook", (req, res) => {
   const body = (req.body?.Body ?? "").trim();
   const from = req.body?.From ?? "unknown";
   const lower = body.toLowerCase();
   res.set("Content-Type", "text/xml");
-  // ── Admin-only command: FULFILL <REF> (provision + deliver eSIM via Airalo) ──
-  // Gated to the operator's own WhatsApp number. Send this only after you have
-  // verified the customer's payment in Paystack.
+
+  // Admin-only: FULFILL <REF> — provision + deliver eSIM (use after verifying payment).
   if (process.env.ADMIN_WHATSAPP && from === process.env.ADMIN_WHATSAPP && lower.startsWith("fulfill")) {
     const ref = body.trim().split(/\s+/)[1] ?? "";
     const order = findOrderByReference(ref);
-    if (!order) {
-      return void res.send(twimlMessage(`❓ No order found for *${ref || "(none)"}*. Usage: FULFILL ESIM-XXXX`));
-    }
-    // Acknowledge immediately, then provision asynchronously (Airalo can take a few seconds).
+    if (!order) return void res.send(twimlMessage(`❓ No order found for *${ref || "(none)"}*. Usage: FULFILL ESIM-XXXX`));
     res.send(twimlMessage(`⏳ Provisioning eSIM for *${order.reference}* (${order.planName} — ${order.customerName})...`));
     fulfillOrder(order)
-      .then((sim) =>
-        notifyAdmin(
-          `✅ *Fulfilled ${order.reference}*\n` +
-          `${order.planName} sent to ${order.customerName}\n📧 ${order.customerEmail}\n📲 ${order.senderNumber}\n` +
-          `ICCID: ${sim.iccid || "n/a"}`
-        )
-      )
-      .catch((e) => {
-        updateOrderStatus(order.id, "fulfillment_failed");
-        notifyAdmin(`❌ *Fulfillment FAILED for ${order.reference}*\n${e.message}\n\nProvision this one manually.`);
-      });
+      .then((sim) => notifyAdmin(`✅ *Fulfilled ${order.reference}*\n${order.planName} → ${order.customerName}\n📧 ${order.customerEmail}\n📲 ${order.senderNumber}\nICCID: ${sim.iccid || "n/a"}`))
+      .catch((e) => { updateOrderStatus(order.id, "fulfillment_failed"); notifyAdmin(`❌ *Fulfillment FAILED for ${order.reference}*\n${e.message}\n\nProvision manually.`); });
     return;
   }
-  // Global keywords
+
   if (["hi", "hello", "hey", "start", "menu"].some((kw) => lower === kw)) {
-    resetConversation(from);
-    setConversation(from, { step: "destination_asked" });
+    resetConversation(from); setConversation(from, { step: "destination_asked" });
     return void res.send(twimlMessage(welcomeMessage()));
   }
   if (lower === "help") return void res.send(twimlMessage(helpMessage()));
   if (lower === "plans") {
-    resetConversation(from);
-    setConversation(from, { step: "destination_asked" });
+    resetConversation(from); setConversation(from, { step: "destination_asked" });
     return void res.send(twimlMessage(destinationListMessage()));
   }
-  if (lower === "compatible" || lower === "compatibility") {
-    return void res.send(twimlMessage(compatibilityMessage()));
-  }
-  // PAID <REF>
+  if (lower === "compatible" || lower === "compatibility") return void res.send(twimlMessage(compatibilityMessage()));
+
   if (lower.startsWith("paid")) {
     const ref = body.trim().split(/\s+/)[1] ?? "";
     const order = findOrderByReference(ref);
     if (!order) {
-      return void res.send(
-        twimlMessage(
-          `❓ I couldn't find an order with reference *${ref || "(none provided)"}*.\n\nPlease check your reference and try again, e.g.:\n*PAID ESIM-A3F9*\n\nType *help* if you need assistance.`
-        )
-      );
+      return void res.send(twimlMessage(`❓ I couldn't find an order with reference *${ref || "(none provided)"}*.\n\nPlease check your reference and try again, e.g.:\n*PAID ESIM-A3F9*\n\nType *help* if you need assistance.`));
     }
-    if (order.status === "payment_claimed" || order.status === "paid") {
-      return void res.send(
-        twimlMessage(
-          `✅ We've already recorded your payment for *${order.planName}* (ref: *${order.reference}*). Our team will send your eSIM QR code shortly.`
-        )
-      );
+    if (["payment_claimed", "paid", "fulfilled"].includes(order.status)) {
+      return void res.send(twimlMessage(`✅ We've already recorded your payment for *${order.planName}* (ref: *${order.reference}*). Our team will send your eSIM QR code shortly.`));
     }
     updateOrderStatus(order.id, "payment_claimed");
-    // Urgent admin alert — action required
     notifyAdmin(
-      `💳 *PAYMENT CLAIMED — ACTION REQUIRED*\n` +
-      `👤 ${order.customerName}\n` +
-      `📧 ${order.customerEmail}\n` +
-      `📦 ${order.planName} — ${order.destinationName}\n` +
-      `💰 R${order.priceZar}\n` +
-      `🔖 Ref: ${order.reference}\n\n` +
-      `1. Verify payment in Paystack\n` +
-      `2. Provision eSIM from your provider\n` +
-      `3. Send QR code to customer`
+      `💳 *PAYMENT CLAIMED — ACTION REQUIRED*\n👤 ${order.customerName}\n📧 ${order.customerEmail}\n📦 ${order.planName} — ${order.destinationName}\n💰 R${order.priceZar}\n🔖 Ref: ${order.reference}\n\n1. Verify payment in Paystack\n2. Reply *FULFILL ${order.reference}* to auto-send the eSIM`
     );
     return void res.send(twimlMessage(paymentClaimedMessage(order.reference, order.planName)));
   }
-  // Conversation flow
+
   const state = getConversation(from);
   if (state.step === "greeting" || state.step === "destination_asked") {
     const numChoice = parseInt(lower, 10);
-    const destination =
-      !isNaN(numChoice) && numChoice >= 1 && numChoice <= catalog.length
-        ? catalog[numChoice - 1]
-        : findDestination(body);
-    if (!destination) {
-      setConversation(from, { step: "destination_asked" });
-      return void res.send(twimlMessage(welcomeMessage()));
-    }
+    const destination = !isNaN(numChoice) && numChoice >= 1 && numChoice <= catalog.length ? catalog[numChoice - 1] : findDestination(body);
+    if (!destination) { setConversation(from, { step: "destination_asked" }); return void res.send(twimlMessage(welcomeMessage())); }
     setConversation(from, { step: "plans_shown", selectedDestination: destination });
     return void res.send(twimlMessage(plansMessage(destination.name, destination.plans)));
   }
   if (state.step === "plans_shown" && state.selectedDestination) {
     const plan = findPlan(state.selectedDestination, body);
     if (!plan) {
-      return void res.send(
-        twimlMessage(
-          `❓ I didn't catch that. Reply with *1*, *2*, or *3* to choose a plan:\n\n` +
-            plansMessage(state.selectedDestination.name, state.selectedDestination.plans)
-        )
-      );
+      return void res.send(twimlMessage(`❓ I didn't catch that. Reply with *1*, *2*, or *3* to choose a plan:\n\n` + plansMessage(state.selectedDestination.name, state.selectedDestination.plans)));
     }
     setConversation(from, { step: "ask_name", selectedPlan: plan });
     return void res.send(twimlMessage(askNameMessage(plan.name, plan.priceZar)));
   }
   if (state.step === "ask_name") {
     const name = body.trim();
-    if (name.length < 2) {
-      return void res.send(twimlMessage(`Please enter your full name (at least 2 characters).`));
-    }
+    if (name.length < 2) return void res.send(twimlMessage(`Please enter your full name (at least 2 characters).`));
     setConversation(from, { step: "ask_email", customerName: name });
     return void res.send(twimlMessage(askEmailMessage(name)));
   }
-  if (
-    state.step === "ask_email" &&
-    state.selectedDestination &&
-    state.selectedPlan &&
-    state.customerName
-  ) {
+  if (state.step === "ask_email" && state.selectedDestination && state.selectedPlan && state.customerName) {
     const email = body.trim();
     if (!isValidEmail(email)) {
-      return void res.send(
-        twimlMessage(
-          `That doesn't look like a valid email address. Please try again — this is where your eSIM QR code will be sent.\n\nExample: *yourname@gmail.com*`
-        )
-      );
+      return void res.send(twimlMessage(`That doesn't look like a valid email address. Please try again — this is where your eSIM QR code will be sent.\n\nExample: *yourname@gmail.com*`));
     }
     const { selectedDestination: dest, selectedPlan: plan, customerName } = state;
     const paymentUrl = process.env.PAYMENT_LINK ?? null;
     const order = createOrder({
-      senderNumber: from,
-      customerName,
-      customerEmail: email,
-      planId: plan.id,
-      planName: plan.name,
-      destinationName: dest.name,
-      priceZar: plan.priceZar,
+      senderNumber: from, customerName, customerEmail: email,
+      planId: plan.id, planName: plan.name, destinationName: dest.name, priceZar: plan.priceZar,
     });
     setConversation(from, { step: "order_placed" });
-    // Notify admin of new order
-    notifyAdmin(
-      `🛒 *New RoamSIM Order*\n` +
-      `👤 ${customerName} (${email})\n` +
-      `📦 ${plan.name} — ${dest.name}\n` +
-      `💰 R${plan.priceZar}\n` +
-      `🔖 Ref: ${order.reference}\n` +
-      `📞 ${from}\n\n` +
-      `Waiting for customer to pay and send PAID ${order.reference}`
-    );
-    return void res.send(
-      twimlMessage(
-        orderConfirmationMessage(
-          plan.name,
-          dest.name,
-          plan.priceZar,
-          order.reference,
-          customerName,
-          paymentUrl
-        )
-      )
-    );
+    notifyAdmin(`🛒 *New RoamSIM Order*\n👤 ${customerName} (${email})\n📦 ${plan.name} — ${dest.name}\n💰 R${plan.priceZar}\n🔖 Ref: ${order.reference}\n📞 ${from}\n\nWaiting for customer to pay and send PAID ${order.reference}`);
+    return void res.send(twimlMessage(orderConfirmationMessage(plan.name, dest.name, plan.priceZar, order.reference, customerName, paymentUrl)));
   }
   if (state.step === "order_placed") {
-    return void res.send(
-      twimlMessage(
-        `✅ Your order has been placed. Please complete payment via the link we sent, then reply *PAID <your reference>* to let us know.\n\nType *menu* to start a new order or *help* for assistance.`
-      )
-    );
+    return void res.send(twimlMessage(`✅ Your order has been placed. Please complete payment via the link we sent, then reply *PAID <your reference>* to let us know.\n\nType *menu* to start a new order or *help* for assistance.`));
   }
-  // Fallback
+
   resetConversation(from);
   setConversation(from, { step: "destination_asked" });
   res.send(twimlMessage(welcomeMessage()));
 });
-// ─────────────────────────────────────────────────────────────────────────────
-// START
-// ─────────────────────────────────────────────────────────────────────────────
+
 const port = parseInt(process.env.PORT ?? "3000", 10);
-app.listen(port, () => console.log(`RoamSIM bot running on port ${port}`));
+app.listen(port, () => {
+  console.log(`RoamSIM bot running on port ${port}`);
+  initDb();
+});
