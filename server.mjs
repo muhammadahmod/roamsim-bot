@@ -432,6 +432,21 @@ app.get("/api/admin/airalo/mapping", (req, res) => {
   res.json({ mapping: PLAN_TO_AIRALO_PACKAGE, unmapped, configured: !!process.env.AIRALO_CLIENT_ID });
 });
 
+// Admin — diagnostic: submit a real (sandbox) order for a given package and report
+// the outcome WITHOUT returning any URLs (so it never trips content filters).
+app.get("/api/admin/airalo/testorder", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const pkg = req.query.package;
+  if (!pkg) return res.status(400).json({ error: "pass ?package=<airalo_package_id>" });
+  try {
+    const data = await airaloSubmitOrder(pkg, "RoamSIM diagnostic", null);
+    const sim = data?.data?.sims?.[0];
+    res.json({ ok: true, orderId: data?.data?.id ?? null, simId: sim?.id ?? null, iccid: sim?.iccid ?? null, hasQr: !!sim?.qrcode_url });
+  } catch (e) {
+    res.json({ ok: false, error: String(e.message || e).slice(0, 500) });
+  }
+});
+
 app.post("/api/webhook", (req, res) => {
   const body = (req.body?.Body ?? "").trim();
   const from = req.body?.From ?? "unknown";
