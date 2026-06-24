@@ -55,12 +55,24 @@ function notifyAdmin(message) {
 const AIRALO_BASE = process.env.AIRALO_BASE_URL || "https://partners-api.airalo.com";
 // Map catalog plan id -> Airalo package_id. Populate from /api/admin/airalo/packages.
 const PLAN_TO_AIRALO_PACKAGE = {
-  "uk-5gb-7d": "", "uk-15gb-30d": "", "uk-unlimited-30d": "",
-  "uae-5gb-7d": "", "uae-15gb-30d": "", "uae-30gb-30d": "",
-  "aus-5gb-14d": "", "aus-15gb-30d": "", "aus-unlimited-30d": "",
-  "us-5gb-7d": "", "us-15gb-30d": "", "us-unlimited-30d": "",
-  "eu-5gb-14d": "", "eu-15gb-30d": "", "eu-unlimited-30d": "",
-  "ksa-5gb-14d": "", "ksa-15gb-30d": "", "ksa-30gb-30d": "",
+  "uk-5gb-7d": "uki-mobile-in-30days-5gb",
+  "uk-15gb-30d": "uki-mobile-in-30days-20gb",
+  "uk-unlimited-30d": "uki-mobile-30days-unlimited",
+  "uae-5gb-7d": "burj-mobile-30days-5gb",
+  "uae-15gb-30d": "burj-mobile-30days-20gb",
+  "uae-30gb-30d": "burj-mobile-30days-20gb",
+  "aus-5gb-14d": "yes-go-in-30days-5gb",
+  "aus-15gb-30d": "yes-go-in-30days-20gb",
+  "aus-unlimited-30d": "yes-go-in-30days-unlimited",
+  "us-5gb-7d": "change-plus-7days-5gb",
+  "us-15gb-30d": "change-in-30days-20gb",
+  "us-unlimited-30d": "change-in-30days-unlimited",
+  "eu-5gb-14d": "",
+  "eu-15gb-30d": "",
+  "eu-unlimited-30d": "",
+  "ksa-5gb-14d": "red-sand-30days-5gb",
+  "ksa-15gb-30d": "red-sand-30days-20gb",
+  "ksa-30gb-30d": "red-sand-30days-20gb",
 };
 let airaloTokenCache = { token: null, expiresAt: 0 };
 function airaloHttp(method, path, { token, form } = {}) {
@@ -99,10 +111,12 @@ async function getAiraloToken() {
   airaloTokenCache = { token, expiresAt: Date.now() + (res?.data?.expires_in || 86400) * 1000 - 60000 };
   return token;
 }
-async function airaloListPackages(country) {
+async function airaloListPackages(country, type) {
   const token = await getAiraloToken();
-  const q = country ? `?filter[country]=${encodeURIComponent(country)}&limit=100` : "?limit=100";
-  return airaloHttp("GET", "/v2/packages" + q, { token });
+  const params = ["limit=100"];
+  if (country) params.push("filter[country]=" + encodeURIComponent(country));
+  if (type) params.push("filter[type]=" + encodeURIComponent(type));
+  return airaloHttp("GET", "/v2/packages?" + params.join("&"), { token });
 }
 async function airaloSubmitOrder(packageId, description, toEmail) {
   const token = await getAiraloToken();
@@ -152,7 +166,7 @@ const catalog = [
     plans: [
       { id: "uae-5gb-7d", name: "UAE Starter", data: "5 GB", validity: "7 days", priceZar: 229 },
       { id: "uae-15gb-30d", name: "UAE Explorer", data: "15 GB", validity: "30 days", priceZar: 499 },
-      { id: "uae-30gb-30d", name: "UAE Plus", data: "30 GB", validity: "30 days", priceZar: 799 },
+      { id: "uae-30gb-30d", name: "UAE Plus", data: "20 GB", validity: "30 days", priceZar: 799 },
     ] },
   { id: "australia", name: "Australia", emoji: "🇦🇺",
     aliases: ["australia", "sydney", "melbourne", "brisbane", "perth", "oz", "aus"],
@@ -181,7 +195,7 @@ const catalog = [
     plans: [
       { id: "ksa-5gb-14d", name: "KSA Starter", data: "5 GB", validity: "14 days", priceZar: 259 },
       { id: "ksa-15gb-30d", name: "KSA Explorer", data: "15 GB", validity: "30 days", priceZar: 549 },
-      { id: "ksa-30gb-30d", name: "KSA Plus", data: "30 GB", validity: "30 days", priceZar: 849 },
+      { id: "ksa-30gb-30d", name: "KSA Plus", data: "20 GB", validity: "30 days", priceZar: 849 },
     ] },
 ];
 function findDestination(text) {
@@ -409,7 +423,7 @@ app.get("/dashboard", (req, res) => {
 });
 app.get("/api/admin/airalo/packages", async (req, res) => {
   if (!requireAdmin(req, res)) return;
-  try { res.json(await airaloListPackages(req.query.country)); }
+  try { res.json(await airaloListPackages(req.query.country, req.query.type)); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get("/api/admin/airalo/mapping", (req, res) => {
