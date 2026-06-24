@@ -52,7 +52,7 @@ function notifyAdmin(message) {
 }
 
 // ── Airalo Partner API (eSIM auto-provisioning) ──
-const AIRALO_BASE = process.env.AIRALO_BASE_URL || "https://sandbox-partners-api.airalo.com";
+const AIRALO_BASE = process.env.AIRALO_BASE_URL || "https://partners-api.airalo.com";
 // Map catalog plan id -> Airalo package_id. Populate from /api/admin/airalo/packages.
 const PLAN_TO_AIRALO_PACKAGE = {
   "uk-5gb-7d": "", "uk-15gb-30d": "", "uk-unlimited-30d": "",
