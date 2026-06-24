@@ -436,7 +436,7 @@ app.get("/api/admin/airalo/packages", async (req, res) => {
     }
     res.json({ count: out.length, packages: out });
   } catch (e) {
-    res.json({ error: String(e.message || e).replace(/https?:\/\/\S+/g, "[url]").slice(0, 300) });
+    res.json({ error: String(e.message || e).replace(/\?\S*/g, "").replace(/https?:\/\/\S+/g, "[url]").replace(/[?&]\w+=/g, " ").slice(0, 300) });
   }
 });
 app.get("/api/admin/airalo/mapping", (req, res) => {
