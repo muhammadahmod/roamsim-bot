@@ -127,7 +127,9 @@ async function airaloSubmitOrder(packageId, description, toEmail) {
 async function fulfillOrder(order) {
   const packageId = PLAN_TO_AIRALO_PACKAGE[order.planId];
   if (!packageId) throw new Error(`No Airalo package mapped for plan "${order.planId}" — update PLAN_TO_AIRALO_PACKAGE`);
-  const res = await airaloSubmitOrder(packageId, order.reference, order.customerEmail);
+  // Note: to_email omitted — Airalo's eSIM Cloud email isn't enabled, and it
+  // causes order rejection. We deliver the QR via WhatsApp instead.
+  const res = await airaloSubmitOrder(packageId, order.reference);
   const sim = res?.data?.sims?.[0];
   if (!sim) throw new Error("Airalo order returned no SIM");
   const lines = [
@@ -439,7 +441,7 @@ app.get("/api/admin/airalo/testorder", async (req, res) => {
   const pkg = req.query.package;
   if (!pkg) return res.status(400).json({ error: "pass ?package=<airalo_package_id>" });
   try {
-    const data = await airaloSubmitOrder(pkg, "RoamSIM diagnostic", null);
+    const data = await airaloSubmitOrder(pkg, "RoamSIM diagnostic", req.query.email || null);
     const sim = data?.data?.sims?.[0];
     res.json({ ok: true, orderId: data?.data?.id ?? null, simId: sim?.id ?? null, iccid: sim?.iccid ?? null, hasQr: !!sim?.qrcode_url });
   } catch (e) {
