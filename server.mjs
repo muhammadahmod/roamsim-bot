@@ -425,8 +425,19 @@ app.get("/dashboard", (req, res) => {
 });
 app.get("/api/admin/airalo/packages", async (req, res) => {
   if (!requireAdmin(req, res)) return;
-  try { res.json(await airaloListPackages(req.query.country, req.query.type)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  try {
+    const data = await airaloListPackages(req.query.country, req.query.type);
+    const out = [];
+    for (const c of (data?.data || [])) {
+      const region = c.slug || c.title || "";
+      for (const op of (c.operators || [])) for (const p of (op.packages || [])) {
+        out.push({ region, id: p.id, title: p.title, data: p.data, day: p.day, unlimited: p.is_unlimited, net: p.net_price });
+      }
+    }
+    res.json({ count: out.length, packages: out });
+  } catch (e) {
+    res.json({ error: String(e.message || e).replace(/https?:\/\/\S+/g, "[url]").slice(0, 300) });
+  }
 });
 app.get("/api/admin/airalo/mapping", (req, res) => {
   if (!requireAdmin(req, res)) return;
