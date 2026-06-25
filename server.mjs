@@ -460,6 +460,32 @@ app.get("/api/admin/airalo/testorder", async (req, res) => {
   }
 });
 
+// Airalo webhook — receives low-data / usage alerts so we can notify customers and
+// encourage top-ups. Register this URL in the Airalo platform's webhook settings:
+//   https://roamsim-bot.onrender.com/api/webhook/airalo
+app.post("/api/webhook/airalo", (req, res) => {
+  const secret = process.env.AIRALO_WEBHOOK_SECRET;
+  if (secret && req.query.secret !== secret && req.headers["x-airalo-signature"] !== secret) {
+    return void res.status(401).json({ error: "unauthorized" });
+  }
+  const b = req.body || {};
+  const iccid = b.iccid || b?.data?.iccid || b?.sim?.iccid || null;
+  let order = null;
+  for (const o of orders.values()) {
+    if (iccid && o.esim && String(o.esim.iccid) === String(iccid)) { order = o; break; }
+  }
+  if (order && order.senderNumber) {
+    sendWhatsApp(
+      order.senderNumber,
+      `📶 *Your RoamSIM data is running low* for ${order.destinationName}.\n\nTo stay connected, reply *TOPUP* (or just message us) and we'll add more data to your eSIM right away. ✈️`
+    );
+    notifyAdmin(`🔔 Low-data alert: ${order.customerName} (${order.reference}, ICCID ${iccid}) — customer nudged to top up.`);
+  } else {
+    console.log("[AIRALO WEBHOOK]", b.event || b.type || "event", "iccid:", iccid, "(no matching order)");
+  }
+  res.json({ received: true });
+});
+
 app.post("/api/webhook", (req, res) => {
   const body = (req.body?.Body ?? "").trim();
   const from = req.body?.From ?? "unknown";
@@ -471,6 +497,14 @@ app.post("/api/webhook", (req, res) => {
     const ref = body.trim().split(/\s+/)[1] ?? "";
     const order = findOrderByReference(ref);
     if (!order) return void res.send(twimlMessage(`❓ No order found for *${ref || "(none)"}*. Usage: FULFILL ESIM-XXXX`));
+    // Duplicate-order safeguard: never submit a second Airalo order for the same order.
+    if (order.status === "fulfilled" || order.esim) {
+      return void res.send(twimlMessage(`✅ *${order.reference}* is already fulfilled — the eSIM was sent to ${order.customerName}. No duplicate order placed.`));
+    }
+    if (order.status === "fulfilling") {
+      return void res.send(twimlMessage(`⏳ *${order.reference}* is already being provisioned — hang tight, no need to resend.`));
+    }
+    updateOrderStatus(order.id, "fulfilling"); // lock to prevent concurrent/duplicate fulfillment
     res.send(twimlMessage(`⏳ Provisioning eSIM for *${order.reference}* (${order.planName} — ${order.customerName})...`));
     fulfillOrder(order)
       .then((sim) => notifyAdmin(`✅ *Fulfilled ${order.reference}*\n${order.planName} → ${order.customerName}\n📧 ${order.customerEmail}\n📲 ${order.senderNumber}\nICCID: ${sim.iccid || "n/a"}`))
@@ -488,6 +522,10 @@ app.post("/api/webhook", (req, res) => {
     return void res.send(twimlMessage(destinationListMessage()));
   }
   if (lower === "compatible" || lower === "compatibility") return void res.send(twimlMessage(compatibilityMessage()));
+  if (lower === "topup" || lower === "top up" || lower === "top-up") {
+    notifyAdmin(`🔝 *TOP-UP request* from ${from}`);
+    return void res.send(twimlMessage(`🔝 *Top up your eSIM*\n\nReply with your order reference (e.g. *ESIM-XXXX*) and how much data you'd like to add, and our team will sort it out right away. ✈️`));
+  }
 
   if (lower.startsWith("paid")) {
     const ref = body.trim().split(/\s+/)[1] ?? "";
