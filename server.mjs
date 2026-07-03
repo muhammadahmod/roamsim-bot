@@ -111,11 +111,12 @@ async function getAiraloToken() {
   airaloTokenCache = { token, expiresAt: Date.now() + (res?.data?.expires_in || 86400) * 1000 - 60000 };
   return token;
 }
-async function airaloListPackages(country, type) {
+async function airaloListPackages(country, type, page) {
   const token = await getAiraloToken();
   const params = ["limit=100"];
   if (country) params.push("filter[country]=" + encodeURIComponent(country));
   if (type) params.push("filter[type]=" + encodeURIComponent(type));
+  if (page) params.push("page=" + page);
   return airaloHttp("GET", "/v2/packages?" + params.join("&"), { token });
 }
 async function airaloSubmitOrder(packageId, description, toEmail) {
@@ -171,12 +172,19 @@ async function runCatalogSync() {
   syncState.lastRunAt = new Date().toISOString();
   try {
     const found = new Map();
-    const queries = [["GB"], ["AE"], ["AU"], ["US"], ["SA"], [null, "global"]];
-    for (const [country, type] of queries) {
-      const data = await airaloListPackages(country, type);
-      for (const c of data?.data || [])
+    const ingest = (data) => {
+      const arr = data?.data || [];
+      for (const c of arr)
         for (const op of c.operators || [])
           for (const p of op.packages || []) found.set(String(p.id), p);
+      return arr.length;
+    };
+    for (const country of ["GB", "AE", "AU", "US", "SA"]) {
+      ingest(await airaloListPackages(country));
+    }
+    // the global/regional catalogue (e.g. Europe packages) is paginated — walk it
+    for (let page = 1; page <= 6; page++) {
+      if (ingest(await airaloListPackages(null, "global", page)) === 0) break;
     }
     const mappedIds = [...new Set(Object.values(PLAN_TO_AIRALO_PACKAGE).filter(Boolean))];
     const problems = [];
