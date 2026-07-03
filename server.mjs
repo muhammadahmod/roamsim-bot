@@ -45,9 +45,53 @@ function sendWhatsApp(to, message, mediaUrl) {
     req.end();
   });
 }
+function sendWhatsAppTemplate(to, contentSid, variables) {
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const from = process.env.TWILIO_FROM;
+  if (!sid || !token || !from || !to) {
+    console.log("[WHATSAPP TEMPLATE SEND - not configured]", to);
+    return Promise.resolve();
+  }
+  const payload = new URLSearchParams({
+    From: from,
+    To: to,
+    ContentSid: contentSid,
+    ContentVariables: JSON.stringify(variables),
+  }).toString();
+  const options = {
+    hostname: "api.twilio.com",
+    path: `/2010-04-01/Accounts/${sid}/Messages.json`,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: "Basic " + Buffer.from(`${sid}:${token}`).toString("base64"),
+    },
+  };
+  return new Promise((resolve) => {
+    const req = https.request(options, (res) => {
+      let data = "";
+      res.on("data", (c) => (data += c));
+      res.on("end", () => {
+        if (res.statusCode >= 400) console.error("[WHATSAPP TEMPLATE SEND ERROR]", res.statusCode, data);
+        resolve();
+      });
+    });
+    req.on("error", (e) => { console.error("[WHATSAPP TEMPLATE SEND ERROR]", e.message); resolve(); });
+    req.write(payload);
+    req.end();
+  });
+}
 function notifyAdmin(message) {
   const to = process.env.ADMIN_WHATSAPP;
   if (!to) { console.log("[ADMIN NOTIFY - not configured]", message); return Promise.resolve(); }
+  const contentSid = process.env.ADMIN_CONTENT_SID;
+  if (contentSid) {
+    // Approved template messages deliver even outside WhatsApp's 24h session
+    // window. Template variables cannot contain newlines, so flatten to one line.
+    const flat = String(message).replace(/\s*\n+\s*/g, " | ").trim();
+    return sendWhatsAppTemplate(to, contentSid, { "1": flat });
+  }
   return sendWhatsApp(to, message);
 }
 
