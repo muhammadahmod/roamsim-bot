@@ -180,7 +180,16 @@ async function runCatalogSync() {
       return arr.length;
     };
     for (const country of ["GB", "AE", "AU", "US", "SA"]) {
-      ingest(await airaloListPackages(country));
+      const data = await airaloListPackages(country);
+      ingest(data);
+      if (country === "SA" && !syncState.saDebugLogged) {
+        syncState.saDebugLogged = true;
+        const ids = [];
+        for (const c of data?.data || [])
+          for (const op of c.operators || [])
+            for (const p of op.packages || []) ids.push(p.id);
+        console.log("[SYNC][SA] " + ids.length + " package(s): " + ids.join(", "));
+      }
     }
     // the global/regional catalogue (e.g. Europe packages) is paginated — walk it
     for (let page = 1; page <= 6; page++) {
