@@ -154,6 +154,71 @@ async function fulfillOrder(order) {
   return sim;
 }
 
+// ── Hourly Airalo catalogue sync (availability + price-drift watchdog) ──
+// Satisfies Airalo's "sync /v2/packages at least hourly" best practice and
+// alerts the admin on WhatsApp BEFORE a customer hits a fulfilment failure.
+const SYNC_INTERVAL_MS = 60 * 60 * 1000;
+const syncState = {
+  lastRunAt: null,
+  lastSuccessAt: null,
+  consecutiveFailures: 0,
+  packagesSeenLastRun: 0,
+  netPrices: {},   // package_id -> last known net price (USD)
+  missingRuns: {}, // package_id -> consecutive runs missing after having been seen
+  notDiscoverable: [], // mapped ids never returned by our sync queries (informational)
+};
+async function runCatalogSync() {
+  syncState.lastRunAt = new Date().toISOString();
+  try {
+    const found = new Map();
+    const queries = [["GB"], ["AE"], ["AU"], ["US"], ["SA"], [null, "global"]];
+    for (const [country, type] of queries) {
+      const data = await airaloListPackages(country, type);
+      for (const c of data?.data || [])
+        for (const op of c.operators || [])
+          for (const p of op.packages || []) found.set(String(p.id), p);
+    }
+    const mappedIds = [...new Set(Object.values(PLAN_TO_AIRALO_PACKAGE).filter(Boolean))];
+    const problems = [];
+    const notDiscoverable = [];
+    for (const id of mappedIds) {
+      const p = found.get(id);
+      if (!p) {
+        if (syncState.netPrices[id] !== undefined) {
+          syncState.missingRuns[id] = (syncState.missingRuns[id] || 0) + 1;
+          if (syncState.missingRuns[id] === 2) {
+            problems.push("\u274c Package *" + id + "* has disappeared from Airalo's catalogue \u2014 orders for it will fail. Update PLAN_TO_AIRALO_PACKAGE.");
+          }
+        } else {
+          notDiscoverable.push(id);
+        }
+        continue;
+      }
+      syncState.missingRuns[id] = 0;
+      const prev = syncState.netPrices[id];
+      const net = p.net_price;
+      if (prev !== undefined && net !== undefined && Number(net) !== Number(prev)) {
+        problems.push("\u26a0\ufe0f Cost price change for *" + id + "*: $" + prev + " \u2192 $" + net + ". Check our retail margin.");
+      }
+      if (net !== undefined) syncState.netPrices[id] = net;
+    }
+    syncState.notDiscoverable = notDiscoverable;
+    syncState.packagesSeenLastRun = found.size;
+    syncState.lastSuccessAt = new Date().toISOString();
+    syncState.consecutiveFailures = 0;
+    if (problems.length) {
+      await notifyAdmin("\ud83d\udef0 *RoamSIM catalogue sync*\n\n" + problems.join("\n\n"));
+    }
+    console.log("[SYNC] ok \u2014 " + found.size + " packages seen, " + mappedIds.length + " mapped, " + notDiscoverable.length + " not discoverable, " + problems.length + " problem(s).");
+  } catch (e) {
+    syncState.consecutiveFailures += 1;
+    console.error("[SYNC] failed:", e.message);
+    if (syncState.consecutiveFailures === 3) {
+      await notifyAdmin("\ud83d\udef0\u26a0\ufe0f RoamSIM catalogue sync has failed 3 times in a row (" + String(e.message).slice(0, 120) + "). Airalo API or credentials may have an issue.");
+    }
+  }
+}
+
 // ── Catalog ──
 const catalog = [
   { id: "uk", name: "United Kingdom", emoji: "🇬🇧",
@@ -409,7 +474,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", uptime: process.uptime(), orders: orders.size, conversations: conversations.size, persistent: !!dbPool });
+  res.json({ status: "ok", uptime: process.uptime(), orders: orders.size, conversations: conversations.size, persistent: !!dbPool, lastCatalogSync: syncState.lastSuccessAt });
 });
 app.get("/api/admin/orders", (req, res) => {
   if (!requireAdmin(req, res)) return;
@@ -438,6 +503,10 @@ app.get("/api/admin/airalo/packages", async (req, res) => {
   } catch (e) {
     res.json({ error: String(e.message || e).replace(/\?\S*/g, "").replace(/https?:\/\/\S+/g, "[url]").replace(/[?&]\w+=/g, " ").slice(0, 300) });
   }
+});
+app.get("/api/admin/airalo/sync", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  res.json(syncState);
 });
 app.get("/api/admin/airalo/mapping", (req, res) => {
   if (!requireAdmin(req, res)) return;
@@ -593,4 +662,10 @@ const port = parseInt(process.env.PORT ?? "3000", 10);
 app.listen(port, () => {
   console.log(`RoamSIM bot running on port ${port}`);
   initDb();
+  if (process.env.AIRALO_CLIENT_ID && process.env.AIRALO_CLIENT_SECRET) {
+    setTimeout(runCatalogSync, 30 * 1000); // first run shortly after boot
+    setInterval(runCatalogSync, SYNC_INTERVAL_MS);
+  } else {
+    console.log("[SYNC] Airalo credentials not configured — catalogue sync disabled.");
+  }
 });
