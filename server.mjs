@@ -70,9 +70,9 @@ const PLAN_TO_AIRALO_PACKAGE = {
   "eu-5gb-14d": "eurolink-30days-5gb",
   "eu-15gb-30d": "eurolink-30days-20gb",
   "eu-unlimited-30d": "eurolink-30days-unlimited",
-  "ksa-5gb-14d": "red-sand-30days-5gb",
-  "ksa-15gb-30d": "red-sand-30days-10gb",
-  "ksa-30gb-30d": "red-sand-30days-20gb",
+  "ksa-5gb-14d": "redsand-30days-5gb",
+  "ksa-15gb-30d": "redsand-30days-10gb",
+  "ksa-30gb-30d": "redsand-30days-20gb",
 };
 let airaloTokenCache = { token: null, expiresAt: 0 };
 function airaloHttp(method, path, { token, form } = {}) {
