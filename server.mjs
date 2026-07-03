@@ -217,7 +217,7 @@ async function runCatalogSync() {
     if (problems.length) {
       await notifyAdmin("\ud83d\udef0 *RoamSIM catalogue sync*\n\n" + problems.join("\n\n"));
     }
-    console.log("[SYNC] ok \u2014 " + found.size + " packages seen, " + mappedIds.length + " mapped, " + notDiscoverable.length + " not discoverable, " + problems.length + " problem(s).");
+    console.log("[SYNC] ok \u2014 " + found.size + " packages seen, " + mappedIds.length + " mapped, " + notDiscoverable.length + " not discoverable" + (notDiscoverable.length ? " [" + notDiscoverable.join(", ") + "]" : "") + ", " + problems.length + " problem(s).");
   } catch (e) {
     syncState.consecutiveFailures += 1;
     console.error("[SYNC] failed:", e.message);
