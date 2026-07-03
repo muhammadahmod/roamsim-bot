@@ -141,7 +141,7 @@ async function fulfillOrder(order) {
     `📲 *Install:* scan the QR code image above in your phone's eSIM settings (Settings → Mobile/Cellular → Add eSIM).`,
     sim.qrcode ? `\nPrefer manual setup? Use this activation code:\n${sim.qrcode}` : null,
     sim.direct_apple_installation_url ? `\niPhone (iOS 17.4+): tap to install →\n${sim.direct_apple_installation_url}` : null,
-    `\nWe've also emailed full instructions to ${order.customerEmail}. Safe travels! ✈️`,
+    `\nKeep this chat handy — your QR code and activation details above are everything you need. Safe travels! ✈️`,
   ].filter(Boolean).join("\n");
   await sendWhatsApp(order.senderNumber, lines, sim.qrcode_url);
   updateOrderStatus(order.id, "fulfilled");
@@ -343,7 +343,7 @@ function welcomeMessage() {
     `📋 *Before you buy, please note:*\n` +
     `• Your device must be eSIM-compatible and carrier-unlocked\n` +
     `• Plans are data-only (calls/SMS not included unless stated)\n` +
-    `• Your eSIM QR code is delivered by email and WhatsApp after payment is verified\n\n` +
+    `• Your eSIM QR code is delivered right here on WhatsApp after payment is verified\n\n` +
     `Type *compatible* to check if your phone supports eSIM.\n\n` +
     `📍 *Which country are you travelling to?*\n\n${list}\n\nReply with a number or type your destination.`
   );
