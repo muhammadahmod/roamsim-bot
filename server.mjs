@@ -281,6 +281,33 @@ async function runCatalogSync() {
 }
 
 // ── Catalog ──
+// Paystack (payment)
+const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY || "";
+function paystackHttp(method, path, bodyObj) {
+  return new Promise(function (resolve, reject) {
+    const payload = bodyObj ? JSON.stringify(bodyObj) : null;
+    const headers = { Authorization: "Bearer " + PAYSTACK_SECRET, "Content-Type": "application/json" };
+    if (payload) headers["Content-Length"] = Buffer.byteLength(payload);
+    const rq = https.request({ hostname: "api.paystack.co", path: path, method: method, headers: headers }, function (rs) {
+      let d = ""; rs.on("data", function (c) { d += c; }); rs.on("end", function () { try { resolve(JSON.parse(d || "{}")); } catch (e) { reject(new Error("Paystack bad response")); } });
+    });
+    rq.on("error", reject);
+    if (payload) rq.write(payload);
+    rq.end();
+  });
+}
+async function paystackInit(order, email) {
+  if (!PAYSTACK_SECRET) return null;
+  const data = await paystackHttp("POST", "/transaction/initialize", { email: email || "customer@roamsim.co.za", amount: Math.round(order.priceZar * 100), currency: "ZAR", reference: order.reference, metadata: { order_id: order.id, plan: order.planName, destination: order.destinationName, whatsapp: order.senderNumber } });
+  if (!data || !data.status) throw new Error((data && data.message) || "Paystack init failed");
+  return data.data.authorization_url;
+}
+async function paystackVerify(reference) {
+  if (!PAYSTACK_SECRET) return null;
+  const data = await paystackHttp("GET", "/transaction/verify/" + encodeURIComponent(reference), null);
+  return (data && data.data) || null;
+}
+
 const catalog = [
   { id: "uk", name: "United Kingdom", emoji: "🇬🇧",
     aliases: ["uk", "united kingdom", "britain", "england", "london", "scotland", "wales"],
@@ -616,7 +643,28 @@ app.post("/api/webhook/airalo", (req, res) => {
   res.json({ received: true });
 });
 
-app.post("/api/webhook", (req, res) => {
+app.post("/api/webhook/paystack", async (req, res) => {
+  res.json({ received: true });
+  try {
+    const event = req.body || {};
+    if (event.event !== "charge.success") return;
+    const reference = event && event.data && event.data.reference;
+    if (!reference) return;
+    const tx = await paystackVerify(reference);
+    if (!tx || tx.status !== "success") return;
+    const order = findOrderByReference(reference);
+    if (!order) return void notifyAdmin("\u26a0\ufe0f Paystack payment received for unknown reference " + reference + ".");
+    if (Math.round(order.priceZar * 100) !== tx.amount) notifyAdmin("\u26a0\ufe0f Paystack amount mismatch for " + reference + ": charged " + tx.amount + ", expected " + (order.priceZar * 100) + ".");
+    if (order.status === "fulfilled" || order.esim || order.status === "fulfilling") return;
+    updateOrderStatus(order.id, "fulfilling");
+    if (order.senderNumber) sendWhatsApp(order.senderNumber, "\u2705 *Payment received - thank you, " + order.customerName + "!*\n\nWe are provisioning your eSIM now - your QR code will arrive here in under a minute. \ud83d\ude80");
+    fulfillOrder(order)
+      .then(function (sim) { notifyAdmin("\u2705 *PAID + auto-fulfilled " + order.reference + "*\n" + order.planName + " -> " + order.customerName + "\nICCID: " + (sim.iccid || "n/a")); })
+      .catch(function (e) { updateOrderStatus(order.id, "fulfillment_failed"); notifyAdmin("\u274c *PAID but fulfilment FAILED for " + order.reference + "*\n" + e.message + "\nProvision manually: FULFILL " + order.reference); });
+  } catch (e) { console.log("[PAYSTACK WEBHOOK]", e.message); }
+});
+
+app.post("/api/webhook", async (req, res) => {
   const body = (req.body?.Body ?? "").trim();
   const from = req.body?.From ?? "unknown";
   const lower = body.toLowerCase();
@@ -701,12 +749,13 @@ app.post("/api/webhook", (req, res) => {
       return void res.send(twimlMessage(`That doesn't look like a valid email address. Please try again — this is where your eSIM QR code will be sent.\n\nExample: *yourname@gmail.com*`));
     }
     const { selectedDestination: dest, selectedPlan: plan, customerName } = state;
-    const paymentUrl = process.env.PAYMENT_LINK ?? null;
     const order = createOrder({
       senderNumber: from, customerName, customerEmail: email,
       planId: plan.id, planName: plan.name, destinationName: dest.name, priceZar: plan.priceZar,
     });
     setConversation(from, { step: "order_placed" });
+    let paymentUrl = process.env.PAYMENT_LINK ?? null;
+    try { const link = await paystackInit(order, email); if (link) paymentUrl = link; } catch (e) { notifyAdmin("Paystack link failed for " + order.reference + ": " + e.message); }
     notifyAdmin(`🛒 *New RoamSIM Order*\n👤 ${customerName} (${email})\n📦 ${plan.name} — ${dest.name}\n💰 R${plan.priceZar}\n🔖 Ref: ${order.reference}\n📞 ${from}\n\nWaiting for customer to pay and send PAID ${order.reference}`);
     return void res.send(twimlMessage(orderConfirmationMessage(plan.name, dest.name, plan.priceZar, order.reference, customerName, paymentUrl)));
   }
