@@ -1,5 +1,5 @@
 /**
- * RoamSIM WhatsApp Bot â server.mjs (single-file Express server, no build step)
+ * RoamSIM WhatsApp Bot — server.mjs (single-file Express server, no build step)
  * Env: PORT, PAYMENT_LINK, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM,
  *      ADMIN_WHATSAPP, ADMIN_KEY, DATABASE_URL (optional Postgres),
  *      AIRALO_CLIENT_ID, AIRALO_CLIENT_SECRET, AIRALO_BASE_URL (optional).
@@ -10,7 +10,7 @@ import { randomUUID } from "crypto";
 import https from "https";
 import { dashboardHtml } from "./dashboard.mjs";
 
-// ââ WhatsApp (Twilio) messaging ââ
+// ── WhatsApp (Twilio) messaging ──
 function sendWhatsApp(to, message, mediaUrl) {
   const sid = process.env.TWILIO_ACCOUNT_SID;
   const token = process.env.TWILIO_AUTH_TOKEN;
@@ -95,7 +95,7 @@ function notifyAdmin(message) {
   return sendWhatsApp(to, message);
 }
 
-// ââ Airalo Partner API (eSIM auto-provisioning) ââ
+// ── Airalo Partner API (eSIM auto-provisioning) ──
 const AIRALO_BASE = process.env.AIRALO_BASE_URL || "https://partners-api.airalo.com";
 // Map catalog plan id -> Airalo package_id. Populate from /api/admin/airalo/packages.
 const PLAN_TO_AIRALO_PACKAGE = {
@@ -171,22 +171,22 @@ async function airaloSubmitOrder(packageId, description, toEmail) {
 }
 async function fulfillOrder(order) {
   const packageId = PLAN_TO_AIRALO_PACKAGE[order.planId];
-  if (!packageId) throw new Error(`No Airalo package mapped for plan "${order.planId}" â update PLAN_TO_AIRALO_PACKAGE`);
-  // Note: to_email omitted â Airalo's eSIM Cloud email isn't enabled, and it
+  if (!packageId) throw new Error(`No Airalo package mapped for plan "${order.planId}" — update PLAN_TO_AIRALO_PACKAGE`);
+  // Note: to_email omitted — Airalo's eSIM Cloud email isn't enabled, and it
   // causes order rejection. We deliver the QR via WhatsApp instead.
   const res = await airaloSubmitOrder(packageId, order.reference);
   const sim = res?.data?.sims?.[0];
   if (!sim) throw new Error("Airalo order returned no SIM");
   const lines = [
-    `ð *Your RoamSIM eSIM for ${order.destinationName} is ready!*`,
+    `🎉 *Your RoamSIM eSIM for ${order.destinationName} is ready!*`,
     ``,
-    `ð¦ ${order.planName}`,
-    `ð Ref: ${order.reference}`,
+    `📦 ${order.planName}`,
+    `🔖 Ref: ${order.reference}`,
     ``,
-    `ð² *Install:* scan the QR code image above in your phone's eSIM settings (Settings â Mobile/Cellular â Add eSIM).`,
+    `📲 *Install:* scan the QR code image above in your phone's eSIM settings (Settings → Mobile/Cellular → Add eSIM).`,
     sim.qrcode ? `\nPrefer manual setup? Use this activation code:\n${sim.qrcode}` : null,
-    sim.direct_apple_installation_url ? `\niPhone (iOS 17.4+): tap to install â\n${sim.direct_apple_installation_url}` : null,
-    `\nKeep this chat handy â your QR code and activation details above are everything you need. Safe travels! âï¸`,
+    sim.direct_apple_installation_url ? `\niPhone (iOS 17.4+): tap to install →\n${sim.direct_apple_installation_url}` : null,
+    `\nKeep this chat handy — your QR code and activation details above are everything you need. Safe travels! ✈️`,
   ].filter(Boolean).join("\n");
   await sendWhatsApp(order.senderNumber, lines, sim.qrcode_url);
   updateOrderStatus(order.id, "fulfilled");
@@ -199,7 +199,7 @@ async function fulfillOrder(order) {
   return sim;
 }
 
-// ââ Hourly Airalo catalogue sync (availability + price-drift watchdog) ââ
+// ── Hourly Airalo catalogue sync (availability + price-drift watchdog) ──
 // Satisfies Airalo's "sync /v2/packages at least hourly" best practice and
 // alerts the admin on WhatsApp BEFORE a customer hits a fulfilment failure.
 const SYNC_INTERVAL_MS = 60 * 60 * 1000;
@@ -235,7 +235,7 @@ async function runCatalogSync() {
         console.log("[SYNC][SA] " + ids.length + " package(s): " + ids.join(", "));
       }
     }
-    // the global/regional catalogue (e.g. Europe packages) is paginated â walk it
+    // the global/regional catalogue (e.g. Europe packages) is paginated — walk it
     for (let page = 1; page <= 6; page++) {
       if (ingest(await airaloListPackages(null, "global", page)) === 0) break;
     }
@@ -280,7 +280,7 @@ async function runCatalogSync() {
   }
 }
 
-// ââ Catalog ââ
+// ── Catalog ──
 // Paystack (payment)
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY || "";
 function paystackHttp(method, path, bodyObj) {
@@ -309,35 +309,35 @@ async function paystackVerify(reference) {
 }
 
 const catalog = [
-  { id: "uk", name: "United Kingdom", emoji: "ð¬ð§",
+  { id: "uk", name: "United Kingdom", emoji: "🇬🇧",
     aliases: ["uk", "united kingdom", "britain", "england", "london", "scotland", "wales"],
     plans: [
       { id: "uk-5gb-7d", name: "UK Starter", data: "5 GB", validity: "30 days", priceZar: 189 },
       { id: "uk-15gb-30d", name: "UK Explorer", data: "20 GB", validity: "30 days", priceZar: 459 },
       { id: "uk-unlimited-30d", name: "UK Unlimited", data: "Unlimited", validity: "30 days", priceZar: 899 },
     ] },
-  { id: "uae", name: "United Arab Emirates (Dubai)", emoji: "ð¦ðª",
+  { id: "uae", name: "United Arab Emirates (Dubai)", emoji: "🇦🇪",
     aliases: ["uae", "dubai", "abu dhabi", "united arab emirates", "emirates"],
     plans: [
       { id: "uae-5gb-7d", name: "UAE Starter", data: "5 GB", validity: "30 days", priceZar: 189 },
       { id: "uae-15gb-30d", name: "UAE Explorer", data: "10 GB", validity: "30 days", priceZar: 299 },
       { id: "uae-30gb-30d", name: "UAE Plus", data: "20 GB", validity: "30 days", priceZar: 509 },
     ] },
-  { id: "australia", name: "Australia", emoji: "ð¦ðº",
+  { id: "australia", name: "Australia", emoji: "🇦🇺",
     aliases: ["australia", "sydney", "melbourne", "brisbane", "perth", "oz", "aus"],
     plans: [
       { id: "aus-5gb-14d", name: "Aus Starter", data: "5 GB", validity: "30 days", priceZar: 159 },
       { id: "aus-15gb-30d", name: "Aus Explorer", data: "20 GB", validity: "30 days", priceZar: 449 },
       { id: "aus-unlimited-30d", name: "Aus Unlimited", data: "Unlimited", validity: "30 days", priceZar: 989 },
     ] },
-  { id: "usa", name: "United States", emoji: "ðºð¸",
+  { id: "usa", name: "United States", emoji: "🇺🇸",
     aliases: ["usa", "us", "united states", "america", "new york", "los angeles", "miami", "nyc"],
     plans: [
       { id: "us-5gb-7d", name: "US Starter", data: "5 GB", validity: "30 days", priceZar: 199 },
       { id: "us-15gb-30d", name: "US Explorer", data: "20 GB", validity: "30 days", priceZar: 549 },
       { id: "us-unlimited-30d", name: "US Unlimited", data: "Unlimited", validity: "30 days", priceZar: 999 },
     ] },
-  { id: "europe", name: "Europe (Schengen)", emoji: "ðªðº",
+  { id: "europe", name: "Europe (Schengen)", emoji: "🇪🇺",
     aliases: ["europe", "european", "schengen", "france", "paris", "germany", "berlin", "italy", "rome",
       "spain", "madrid", "amsterdam", "netherlands", "portugal", "lisbon", "switzerland", "austria", "greece"],
     plans: [
@@ -345,7 +345,7 @@ const catalog = [
       { id: "eu-15gb-30d", name: "Europe Explorer", data: "20 GB", validity: "30 days", priceZar: 699 },
       { id: "eu-unlimited-30d", name: "Europe Unlimited", data: "Unlimited", validity: "30 days", priceZar: 1079 },
     ] },
-  { id: "saudi-arabia", name: "Saudi Arabia", emoji: "ð¸ð¦",
+  { id: "saudi-arabia", name: "Saudi Arabia", emoji: "🇸🇦",
     aliases: ["saudi arabia", "saudi", "ksa", "riyadh", "jeddah", "mecca", "medina", "umrah", "hajj", "makkah"],
     plans: [
       { id: "ksa-5gb-14d", name: "KSA Starter", data: "5 GB", validity: "30 days", priceZar: 219 },
@@ -365,7 +365,7 @@ function findPlan(destination, selection) {
   return destination.plans.find((p) => p.name.toLowerCase().includes(lower) || p.id === lower) ?? null;
 }
 
-// ââ Conversation state ââ
+// ── Conversation state ──
 const conversations = new Map();
 function getConversation(from) {
   if (!conversations.has(from)) conversations.set(from, { step: "greeting", lastUpdated: new Date() });
@@ -378,7 +378,7 @@ function resetConversation(from) {
   conversations.set(from, { step: "greeting", lastUpdated: new Date() });
 }
 
-// ââ Orders ââ
+// ── Orders ──
 const orders = new Map();
 const referenceIndex = new Map();
 function generateReference() {
@@ -413,11 +413,11 @@ function listOrders() {
   return Array.from(orders.values()).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
-// ââ Persistence (optional Postgres; set DATABASE_URL to make orders durable) ââ
+// ── Persistence (optional Postgres; set DATABASE_URL to make orders durable) ──
 let dbPool = null;
 async function initDb() {
   if (!process.env.DATABASE_URL) {
-    console.log("[DB] No DATABASE_URL â using in-memory storage (resets on restart).");
+    console.log("[DB] No DATABASE_URL — using in-memory storage (resets on restart).");
     return;
   }
   try {
@@ -433,7 +433,7 @@ async function initDb() {
     }
     console.log(`[DB] Connected. Loaded ${rows.length} order(s).`);
   } catch (e) {
-    console.error("[DB] Init failed â falling back to in-memory:", e.message);
+    console.error("[DB] Init failed — falling back to in-memory:", e.message);
     dbPool = null;
   }
 }
@@ -446,7 +446,7 @@ function persistOrder(order) {
   ).catch((e) => console.error("[DB] persist error:", e.message));
 }
 
-// ââ Analytics + admin auth ââ
+// ── Analytics + admin auth ──
 const CONFIRMED_STATUSES = new Set(["payment_claimed", "paid", "fulfilled"]);
 function computeStats() {
   const all = listOrders();
@@ -475,87 +475,87 @@ function computeStats() {
 }
 function requireAdmin(req, res) {
   const key = process.env.ADMIN_KEY;
-  if (!key) { res.status(403).json({ error: "Admin disabled â set the ADMIN_KEY env var to enable." }); return false; }
+  if (!key) { res.status(403).json({ error: "Admin disabled — set the ADMIN_KEY env var to enable." }); return false; }
   const provided = req.query.key || req.headers["x-admin-key"];
-  if (provided !== key) { res.status(401).json({ error: "Unauthorized â missing or invalid key." }); return false; }
+  if (provided !== key) { res.status(401).json({ error: "Unauthorized — missing or invalid key." }); return false; }
   return true;
 }
 
-// ââ TwiML ââ
+// ── TwiML ──
 function twimlMessage(text) {
   const escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   return `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escaped}</Message></Response>`;
 }
 
-// ââ Message templates ââ
+// ── Message templates ──
 function welcomeMessage() {
   const list = catalog.map((d, i) => `${i + 1}. ${d.emoji} ${d.name}`).join("\n");
   return (
-    `ð *Welcome to RoamSIM!*\n\n` +
-    `We help South Africans stay connected abroad with instant eSIM data plans â no physical SIM card needed.\n\n` +
-    `ð *Before you buy, please note:*\n` +
-    `â¢ Your device must be eSIM-compatible and carrier-unlocked\n` +
-    `â¢ Plans are data-only (calls/SMS not included unless stated)\n` +
-    `â¢ Your eSIM QR code is delivered right here on WhatsApp after payment is verified\n\n` +
+    `👋 *Welcome to RoamSIM!*\n\n` +
+    `We help South Africans stay connected abroad with instant eSIM data plans — no physical SIM card needed.\n\n` +
+    `📋 *Before you buy, please note:*\n` +
+    `• Your device must be eSIM-compatible and carrier-unlocked\n` +
+    `• Plans are data-only (calls/SMS not included unless stated)\n` +
+    `• Your eSIM QR code is delivered right here on WhatsApp after payment is verified\n\n` +
     `Type *compatible* to check if your phone supports eSIM.\n\n` +
-    `ð *Which country are you travelling to?*\n\n${list}\n\nReply with a number or type your destination.`
+    `📍 *Which country are you travelling to?*\n\n${list}\n\nReply with a number or type your destination.`
   );
 }
 function plansMessage(destName, plans) {
-  const list = plans.map((p, i) => `*${i + 1}. ${p.name}*\n   ð¶ ${p.data} | â± ${p.validity} | ð° R${p.priceZar}`).join("\n\n");
-  return `â *eSIM Plans for ${destName}*\n\n${list}\n\nReply with *1*, *2*, or *3* to select a plan.`;
+  const list = plans.map((p, i) => `*${i + 1}. ${p.name}*\n   📶 ${p.data} | ⏱ ${p.validity} | 💰 R${p.priceZar}`).join("\n\n");
+  return `✅ *eSIM Plans for ${destName}*\n\n${list}\n\nReply with *1*, *2*, or *3* to select a plan.`;
 }
 function askNameMessage(planName, priceZar) {
-  return `ð *${planName}* (R${priceZar}) â great choice!\n\nTo complete your order I just need a couple of details.\n\nð *What is your full name?*`;
+  return `👍 *${planName}* (R${priceZar}) — great choice!\n\nTo complete your order I just need a couple of details.\n\n📝 *What is your full name?*`;
 }
 function askEmailMessage(name) {
-  return `Thanks, ${name}! ð§\n\n*What is your email address?*\n\nYour eSIM QR code and receipt will be sent here, so please double-check it.`;
+  return `Thanks, ${name}! 📧\n\n*What is your email address?*\n\nYour eSIM QR code and receipt will be sent here, so please double-check it.`;
 }
 function orderConfirmationMessage(planName, destName, priceZar, reference, customerName, paymentUrl) {
   const paymentSection = paymentUrl
-    ? `ð³ *Pay here:*\n${paymentUrl}\n\nð *Enter exactly R${priceZar} at checkout.*\n\nAs soon as your payment clears, your eSIM QR code is delivered right here automatically - usually within a minute. No need to reply or type anything.\n\n_Paid but nothing arrives after a minute? Reply *PAID ${reference}* and I will check for you._ Installation takes under 2 minutes! ð`
-    : `â ï¸ Our team will contact you shortly with a payment link.\n\nYour order reference is *${reference}* â keep it handy.`;
+    ? `💳 *Pay here:*\n${paymentUrl}\n\n👉 *Enter exactly R${priceZar} at checkout.*\n\nAs soon as your payment clears, your eSIM QR code is delivered right here automatically - usually within a minute. No need to reply or type anything.\n\n_Paid but nothing arrives after a minute? Reply *PAID ${reference}* and I will check for you._ Installation takes under 2 minutes! 🚀`
+    : `⚠️ Our team will contact you shortly with a payment link.\n\nYour order reference is *${reference}* — keep it handy.`;
   return (
-    `ð *Order Confirmed, ${customerName}!*\n\n` +
-    `ð¦ *Plan:* ${planName}\nð *Destination:* ${destName}\nð° *Price:* R${priceZar}\nð *Reference:* ${reference}\n\n` +
+    `🎉 *Order Confirmed, ${customerName}!*\n\n` +
+    `📦 *Plan:* ${planName}\n🌍 *Destination:* ${destName}\n💰 *Price:* R${priceZar}\n🔖 *Reference:* ${reference}\n\n` +
     `${paymentSection}\n\nType *menu* to start over or *help* for assistance.`
   );
 }
 function paymentClaimedMessage(reference, planName) {
   return (
-    `â *Payment received â thank you!*\n\n` +
+    `✅ *Payment received — thank you!*\n\n` +
     `We've noted your payment for *${planName}* (ref: *${reference}*).\n\n` +
     `Our team will verify it and send your eSIM QR code to the email you provided. This usually takes a few hours.\n\nIf you have questions, type *help*.`
   );
 }
 function helpMessage() {
   return (
-    `â¹ï¸ *RoamSIM Help*\n\n` +
+    `ℹ️ *RoamSIM Help*\n\n` +
     `I help you buy eSIM data plans for international travel.\n\n` +
     `*How it works:*\n` +
-    `1ï¸â£ Tell me your destination\n2ï¸â£ Choose a data plan\n3ï¸â£ Provide your name & email\n4ï¸â£ Pay via the link I send\n5ï¸â£ Reply *PAID <your reference>* after paying\n6ï¸â£ Receive your eSIM QR code by email & WhatsApp\n\n` +
-    `*Keywords:*\nâ¢ *hi / menu* â restart\nâ¢ *plans* â list destinations\nâ¢ *compatible* â eSIM compatibility guide\nâ¢ *help* â this message\n\n` +
+    `1️⃣ Tell me your destination\n2️⃣ Choose a data plan\n3️⃣ Provide your name & email\n4️⃣ Pay via the link I send\n5️⃣ Reply *PAID <your reference>* after paying\n6️⃣ Receive your eSIM QR code by email & WhatsApp\n\n` +
+    `*Keywords:*\n• *hi / menu* — restart\n• *plans* — list destinations\n• *compatible* — eSIM compatibility guide\n• *help* — this message\n\n` +
     `Questions? Email us at muhammadahmod06@gmail.com`
   );
 }
 function compatibilityMessage() {
   return (
-    `ð± *eSIM Compatibility Guide*\n\n` +
-    `Most flagship phones from 2019 onwards support eSIM â including iPhone XS and later, Samsung Galaxy S20+, Google Pixel 3a+.\n\n` +
-    `*How to check on iPhone:*\nSettings â General â About â look for "Available SIM" or "eSIM" section.\n\n` +
-    `*How to check on Android:*\nSettings â Connections â SIM card manager â look for "Add eSIM".\n\n` +
+    `📱 *eSIM Compatibility Guide*\n\n` +
+    `Most flagship phones from 2019 onwards support eSIM — including iPhone XS and later, Samsung Galaxy S20+, Google Pixel 3a+.\n\n` +
+    `*How to check on iPhone:*\nSettings → General → About → look for "Available SIM" or "eSIM" section.\n\n` +
+    `*How to check on Android:*\nSettings → Connections → SIM card manager → look for "Add eSIM".\n\n` +
     `*Carrier-unlocked:*\nYour phone must not be locked to a local network (e.g. Vodacom, MTN).\n\nReady to order? Type *menu* to get started.`
   );
 }
 function destinationListMessage() {
   const list = catalog.map((d, i) => `${i + 1}. ${d.emoji} ${d.name}`).join("\n");
-  return `ð *Available Destinations*\n\n${list}\n\nReply with the country name or number.`;
+  return `🌍 *Available Destinations*\n\n${list}\n\nReply with the country name or number.`;
 }
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 }
 
-// ââ Express app ââ
+// ── Express app ──
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -602,7 +602,7 @@ app.get("/api/admin/airalo/mapping", (req, res) => {
   res.json({ mapping: PLAN_TO_AIRALO_PACKAGE, unmapped, configured: !!process.env.AIRALO_CLIENT_ID });
 });
 
-// Admin â diagnostic: submit a real (sandbox) order for a given package and report
+// Admin — diagnostic: submit a real (sandbox) order for a given package and report
 // the outcome WITHOUT returning any URLs (so it never trips content filters).
 app.get("/api/admin/airalo/testorder", async (req, res) => {
   if (!requireAdmin(req, res)) return;
@@ -617,7 +617,7 @@ app.get("/api/admin/airalo/testorder", async (req, res) => {
   }
 });
 
-// Airalo webhook â receives low-data / usage alerts so we can notify customers and
+// Airalo webhook — receives low-data / usage alerts so we can notify customers and
 // encourage top-ups. Register this URL in the Airalo platform's webhook settings:
 //   https://roamsim-bot.onrender.com/api/webhook/airalo
 app.post("/api/webhook/airalo", (req, res) => {
@@ -634,9 +634,9 @@ app.post("/api/webhook/airalo", (req, res) => {
   if (order && order.senderNumber) {
     sendWhatsApp(
       order.senderNumber,
-      `ð¶ *Your RoamSIM data is running low* for ${order.destinationName}.\n\nTo stay connected, reply *TOPUP* (or just message us) and we'll add more data to your eSIM right away. âï¸`
+      `📶 *Your RoamSIM data is running low* for ${order.destinationName}.\n\nTo stay connected, reply *TOPUP* (or just message us) and we'll add more data to your eSIM right away. ✈️`
     );
-    notifyAdmin(`ð Low-data alert: ${order.customerName} (${order.reference}, ICCID ${iccid}) â customer nudged to top up.`);
+    notifyAdmin(`🔔 Low-data alert: ${order.customerName} (${order.reference}, ICCID ${iccid}) — customer nudged to top up.`);
   } else {
     console.log("[AIRALO WEBHOOK]", b.event || b.type || "event", "iccid:", iccid, "(no matching order)");
   }
@@ -670,23 +670,23 @@ app.post("/api/webhook", async (req, res) => {
   const lower = body.toLowerCase();
   res.set("Content-Type", "text/xml");
 
-  // Admin-only: FULFILL <REF> â provision + deliver eSIM (use after verifying payment).
+  // Admin-only: FULFILL <REF> — provision + deliver eSIM (use after verifying payment).
   if (process.env.ADMIN_WHATSAPP && from === process.env.ADMIN_WHATSAPP && lower.startsWith("fulfill")) {
     const ref = body.trim().split(/\s+/)[1] ?? "";
     const order = findOrderByReference(ref);
-    if (!order) return void res.send(twimlMessage(`â No order found for *${ref || "(none)"}*. Usage: FULFILL ESIM-XXXX`));
+    if (!order) return void res.send(twimlMessage(`❓ No order found for *${ref || "(none)"}*. Usage: FULFILL ESIM-XXXX`));
     // Duplicate-order safeguard: never submit a second Airalo order for the same order.
     if (order.status === "fulfilled" || order.esim) {
-      return void res.send(twimlMessage(`â *${order.reference}* is already fulfilled â the eSIM was sent to ${order.customerName}. No duplicate order placed.`));
+      return void res.send(twimlMessage(`✅ *${order.reference}* is already fulfilled — the eSIM was sent to ${order.customerName}. No duplicate order placed.`));
     }
     if (order.status === "fulfilling") {
-      return void res.send(twimlMessage(`â³ *${order.reference}* is already being provisioned â hang tight, no need to resend.`));
+      return void res.send(twimlMessage(`⏳ *${order.reference}* is already being provisioned — hang tight, no need to resend.`));
     }
     updateOrderStatus(order.id, "fulfilling"); // lock to prevent concurrent/duplicate fulfillment
-    res.send(twimlMessage(`â³ Provisioning eSIM for *${order.reference}* (${order.planName} â ${order.customerName})...`));
+    res.send(twimlMessage(`⏳ Provisioning eSIM for *${order.reference}* (${order.planName} — ${order.customerName})...`));
     fulfillOrder(order)
-      .then((sim) => notifyAdmin(`â *Fulfilled ${order.reference}*\n${order.planName} â ${order.customerName}\nð§ ${order.customerEmail}\nð² ${order.senderNumber}\nICCID: ${sim.iccid || "n/a"}`))
-      .catch((e) => { updateOrderStatus(order.id, "fulfillment_failed"); notifyAdmin(`â *Fulfillment FAILED for ${order.reference}*\n${e.message}\n\nProvision manually.`); });
+      .then((sim) => notifyAdmin(`✅ *Fulfilled ${order.reference}*\n${order.planName} → ${order.customerName}\n📧 ${order.customerEmail}\n📲 ${order.senderNumber}\nICCID: ${sim.iccid || "n/a"}`))
+      .catch((e) => { updateOrderStatus(order.id, "fulfillment_failed"); notifyAdmin(`❌ *Fulfillment FAILED for ${order.reference}*\n${e.message}\n\nProvision manually.`); });
     return;
   }
 
@@ -701,8 +701,8 @@ app.post("/api/webhook", async (req, res) => {
   }
   if (lower === "compatible" || lower === "compatibility") return void res.send(twimlMessage(compatibilityMessage()));
   if (lower === "topup" || lower === "top up" || lower === "top-up") {
-    notifyAdmin(`ð *TOP-UP request* from ${from}`);
-    return void res.send(twimlMessage(`ð *Top up your eSIM*\n\nReply with your order reference (e.g. *ESIM-XXXX*) and how much data you'd like to add, and our team will sort it out right away. âï¸`));
+    notifyAdmin(`🔝 *TOP-UP request* from ${from}`);
+    return void res.send(twimlMessage(`🔝 *Top up your eSIM*\n\nReply with your order reference (e.g. *ESIM-XXXX*) and how much data you'd like to add, and our team will sort it out right away. ✈️`));
   }
 
     if (lower.startsWith("paid")) {
@@ -745,7 +745,7 @@ app.post("/api/webhook", async (req, res) => {
   if (state.step === "plans_shown" && state.selectedDestination) {
     const plan = findPlan(state.selectedDestination, body);
     if (!plan) {
-      return void res.send(twimlMessage(`â I didn't catch that. Reply with *1*, *2*, or *3* to choose a plan:\n\n` + plansMessage(state.selectedDestination.name, state.selectedDestination.plans)));
+      return void res.send(twimlMessage(`❓ I didn't catch that. Reply with *1*, *2*, or *3* to choose a plan:\n\n` + plansMessage(state.selectedDestination.name, state.selectedDestination.plans)));
     }
     setConversation(from, { step: "ask_name", selectedPlan: plan });
     return void res.send(twimlMessage(askNameMessage(plan.name, plan.priceZar)));
@@ -759,7 +759,7 @@ app.post("/api/webhook", async (req, res) => {
   if (state.step === "ask_email" && state.selectedDestination && state.selectedPlan && state.customerName) {
     const email = body.trim();
     if (!isValidEmail(email)) {
-      return void res.send(twimlMessage(`That doesn't look like a valid email address. Please try again â this is where your eSIM QR code will be sent.\n\nExample: *yourname@gmail.com*`));
+      return void res.send(twimlMessage(`That doesn't look like a valid email address. Please try again — this is where your eSIM QR code will be sent.\n\nExample: *yourname@gmail.com*`));
     }
     const { selectedDestination: dest, selectedPlan: plan, customerName } = state;
     const order = createOrder({
@@ -769,11 +769,11 @@ app.post("/api/webhook", async (req, res) => {
     setConversation(from, { step: "order_placed" });
     let paymentUrl = process.env.PAYMENT_LINK ?? null;
     try { const link = await paystackInit(order, email); if (link) paymentUrl = link; } catch (e) { notifyAdmin("Paystack link failed for " + order.reference + ": " + e.message); }
-    notifyAdmin(`ð *New RoamSIM Order*\nð¤ ${customerName} (${email})\nð¦ ${plan.name} â ${dest.name}\nð° R${plan.priceZar}\nð Ref: ${order.reference}\nð ${from}\n\nWaiting for customer to pay and send PAID ${order.reference}`);
+    notifyAdmin(`🛒 *New RoamSIM Order*\n👤 ${customerName} (${email})\n📦 ${plan.name} — ${dest.name}\n💰 R${plan.priceZar}\n🔖 Ref: ${order.reference}\n📞 ${from}\n\nWaiting for customer to pay and send PAID ${order.reference}`);
     return void res.send(twimlMessage(orderConfirmationMessage(plan.name, dest.name, plan.priceZar, order.reference, customerName, paymentUrl)));
   }
   if (state.step === "order_placed") {
-    return void res.send(twimlMessage(`â Your order has been placed. Please complete payment via the link we sent, then reply *PAID <your reference>* to let us know.\n\nType *menu* to start a new order or *help* for assistance.`));
+    return void res.send(twimlMessage(`✅ Your order has been placed. Please complete payment via the link we sent, then reply *PAID <your reference>* to let us know.\n\nType *menu* to start a new order or *help* for assistance.`));
   }
 
   resetConversation(from);
@@ -789,6 +789,6 @@ app.listen(port, () => {
     setTimeout(runCatalogSync, 30 * 1000); // first run shortly after boot
     setInterval(runCatalogSync, SYNC_INTERVAL_MS);
   } else {
-    console.log("[SYNC] Airalo credentials not configured â catalogue sync disabled.");
+    console.log("[SYNC] Airalo credentials not configured — catalogue sync disabled.");
   }
 });
